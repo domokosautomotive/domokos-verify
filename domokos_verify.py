@@ -32,7 +32,7 @@ GENESIS = "0" * 64
 LEGACY_SIGNATURE_MARKER = "LEGACY-UNSIGNED"
 SUBJECT_TYPE_SCHEMA_VERSION = 3
 IMPLEMENTED_SUBJECT_TYPES = {"work_product"}
-SIGNING_MUTABLE_FIELDS = {"review", "regulatory_mappings", "misra_findings", "audit_state"}
+SIGNING_MUTABLE_FIELDS = {"review", "regulatory_mappings", "misra_findings", "audit_state", "flags"}
 
 
 # ===========================================================================

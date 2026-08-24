@@ -1,7 +1,7 @@
 # Domokos evidence bundle specification
 
 **Format id:** `domokos-bundle/1`
-**Spec version:** 1.0.0 (2026-08-24)
+**Spec version:** 1.1.0 (2026-08-24)
 
 This document is the published interface between the Domokos platform and any
 independent verifier. A verifier implements THIS document, not Domokos
@@ -122,8 +122,9 @@ version 3. The boundary is **checkable**, not defaulted:
 - Otherwise the signature is Ed25519 (RFC 8032), hex, by the key
   `actor_keys.json[actor.identity]` (32-byte public key, hex), over the
   **signing payload**:
-  1. Take the artefact record; remove `review`, `regulatory_mappings`,
-     `misra_findings`, `audit_state`.
+  1. Take the artefact record; remove the mutable lifecycle fields:
+     `review`, `regulatory_mappings`, `misra_findings`, `audit_state`,
+     `flags` (recorded findings — raised after authorship by definition).
   2. Remove `signature` from within `actor`.
   3. If `schema_version < 3`, remove `subject_type` (artefacts signed
      before the field existed are verified against the form they were
