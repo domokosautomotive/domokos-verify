@@ -29,7 +29,7 @@ machine-readable report. Checks (all run, even after a failure):
 | Declared filter is reproducible | re-evaluating the declared predicate reproduces exactly what the PDF rendered |
 | Void entries | any declared void sequence number has a chain entry explaining itself |
 | subject_type schema boundary | pre-v3 entries carry no `subject_type`; v3+ entries carry a valid one; the schema version never regresses |
-| Actor identity signatures | each artefact's Ed25519 signature verifies against its actor's registered key (legacy pre-signing artefacts are reported, not failed) |
+| Actor signatures — platform attestation (server-held key) | each artefact's Ed25519 signature verifies against the key the platform registered for the actor identity (legacy pre-signing artefacts are reported, not failed). The platform holds these keys, so a valid signature shows the platform bound the content to an identity string; it does not show who authored or approved the artefact |
 | Anchor validity | the chain root recomputed at each anchored sequence equals the anchored hash; RFC 3161 tokens embed the root's imprint |
 | PDF continuity statement | the human-readable document and the verifiable record tell the same story |
 

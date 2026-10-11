@@ -328,10 +328,14 @@ def check_signatures(artefacts: list[dict], keys: dict, rep: Report) -> None:
             problems.append(f"{art.get('id')}: signature by {identity!r} does not verify")
         else:
             verified += 1
-    detail = f"{verified} verified, {legacy} legacy-unsigned (reported, not failed)"
+    detail = (
+        f"{verified} verified, {legacy} legacy-unsigned (reported, not failed); "
+        f"signatures are platform attestation (server-held key): they show the platform "
+        f"bound the content to an identity string, not who authored or approved it"
+    )
     if problems:
         detail = "; ".join(problems) + f" [{detail}]"
-    rep.check("actor-signatures", "Actor identity signatures", not problems, detail)
+    rep.check("actor-signatures", "Actor signatures — platform attestation (server-held key)", not problems, detail)
 
 
 def check_anchors(entries: list[dict], anchors: list[dict], continuity: dict, rep: Report) -> None:
