@@ -1178,6 +1178,92 @@ def check_pdf_continuity(b: Bundle, rep: Report) -> None:
               "the PDF's continuity statement differs from the manifest: the document and the record disagree")
 
 
+GAP_CODES = ("GAP-EV-01", "GAP-PROV-01", "GAP-IND-01", "GAP-VER-01", "GAP-TCR-01", "GAP-MAP-01", "GAP-TS-01")
+
+
+def check_gap_register(b: Bundle, rep: Report) -> None:
+    """SPEC §9: every register row rests on ledger entries; the header
+    matches the ledger."""
+    name = "Gap register rows rest on ledger entries"
+    header = b.manifest.get("gap_register")
+    files = b.manifest.get("files", {})
+    if header is None:
+        ok = "gap_register.csv" not in files
+        rep.check("gap-register", name, ok, "no gap register in this bundle (no scope agreed)" if ok else
+                  "gap_register.csv is listed but the manifest has no gap_register header")
+        return
+    problems: List[str] = []
+    try:
+        text = b.zf.read("gap_register.csv").decode("utf-8")
+    except KeyError:
+        rep.check("gap-register", name, False, "gap_register.csv is missing")
+        return
+    meta, table = {}, []
+    for line in text.splitlines():
+        if line.startswith("# "):
+            key, _, value = line[2:].partition(": ")
+            meta[key] = value
+        else:
+            table.append(line)
+    import csv as _csv
+
+    rows = list(_csv.DictReader(table))
+    for key, value in header.items():
+        if meta.get(key) != ("" if value is None else str(value)):
+            problems.append(f"CSV header {key} differs from the manifest")
+    by_seq = {e["seq"]: e for e in b.entries}
+    scope = by_seq.get(header.get("scope_seq"))
+    clauses = set()
+    if scope is None or scope["event_type"] != "scope.agreed" or scope["content_hash"] != header.get("scope_hash"):
+        problems.append("the scope hash is not the content hash of a scope.agreed entry at scope_seq")
+    elif isinstance(scope["payload"], dict):
+        clauses = {(c.get("framework"), c.get("clause")) for c in scope["payload"].get("clauses", [])}
+    rulesets = [e for e in b.entries if e["event_type"] == "ruleset.published" and isinstance(e["payload"], dict)]
+    if header.get("ruleset_digest") is not None and (not rulesets or rulesets[-1]["payload"].get("digest") != header["ruleset_digest"]):
+        problems.append("the ruleset digest is not the digest of the latest ruleset.published entry")
+    if b.entries and (header.get("ledger_head") != b.entries[-1]["content_hash"] or header.get("ledger_head_seq") != b.entries[-1]["seq"]):
+        problems.append("the ledger head in the register is not the bundle's head")
+    if header.get("last_externally_timestamped_seq") != (b.manifest.get("timestamps") or {}).get("last_externally_timestamped_seq"):
+        problems.append("the latest external timestamp differs from the manifest's timestamp summary")
+    assignments: Dict[str, Dict[str, Any]] = {}
+    for e in b.entries:
+        if e["event_type"] == "gap.assigned" and isinstance(e["payload"], dict):
+            assignments[e["payload"].get("gap_id")] = e
+    for row in rows:
+        gid = row.get("gap_id", "?")
+        try:
+            seqs = [int(x) for x in row.get("ledger_seqs", "").split(";") if x]
+        except ValueError:
+            problems.append(f"gap {gid}: ledger_seqs is not a list of numbers")
+            continue
+        if not seqs or any(s not in by_seq for s in seqs):
+            problems.append(f"gap {gid}: cites a ledger seq that is not in the bundle")
+            continue
+        if row.get("code") not in GAP_CODES:
+            problems.append(f"gap {gid}: unknown code {row.get('code')!r}")
+        if not row.get("wording", "").startswith("Evidence not found:"):
+            problems.append(f"gap {gid}: wording is not an evidence-not-found statement")
+        if row.get("artefact_id"):
+            subjects = {_subject(by_seq[s]["payload"]) for s in seqs if isinstance(by_seq[s]["payload"], dict)}
+            if row["artefact_id"] not in subjects:
+                problems.append(f"gap {gid}: none of its ledger entries concern artefact {row['artefact_id']}")
+        if row.get("framework"):
+            if (row["framework"], row.get("clause")) not in clauses or header.get("scope_seq") not in seqs:
+                problems.append(f"gap {gid}: clause {row['framework']} {row.get('clause')} is not in the cited scope")
+        assignment = assignments.get(gid)
+        if row.get("assignment_seq"):
+            entry = by_seq.get(int(row["assignment_seq"]))
+            if (entry is None or entry is not assignment or entry["payload"].get("cause") != row.get("assigned_cause")
+                    or row.get("status") != "assigned"):
+                problems.append(f"gap {gid}: the assignment does not match the latest gap.assigned entry")
+        elif assignment is not None or row.get("status") != "unassigned":
+            problems.append(f"gap {gid}: a recorded assignment is not shown")
+    detail = f"{len(rows)} rows; scope hash {str(header.get('scope_hash'))[:16]}…"
+    if problems:
+        detail = "; ".join(problems[:20]) + f" [{detail}]"
+    rep.check("gap-register", name, not problems, detail)
+
+
 def check_charter(b: Bundle, charter_path: str, version: str, rep: Report) -> None:
     name = "Charter version matches its ledger record"
     try:
@@ -1246,6 +1332,7 @@ def _run_checks(b: Bundle, rep: Report, tsa_roots: Optional[List[str]], charter:
     results = check_anchors(b, roots, rep)
     check_timestamps(b, results, rep)
     check_pdf_continuity(b, rep)
+    check_gap_register(b, rep)
     if charter is not None:
         check_charter(b, charter, charter_version or "", rep)
 

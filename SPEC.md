@@ -260,14 +260,49 @@ compact JSON with sorted keys. A verifier extracts the `/Subject (...)`
 literal (unescaping `\(`, `\)`, `\\`) and it MUST deep-equal
 `manifest.continuity`.
 
-## 9. Charter mode
+## 9. Gap register
+
+A bundle exported after an assessment scope was agreed carries the
+engagement's gap register: `gap_register.csv` and `gap_register.pdf`, both
+listed in `files`, and `manifest.gap_register` with `scope_hash`,
+`scope_seq`, `programme`, `ruleset_digest`, `ledger_head`, `ledger_head_seq`,
+`last_externally_timestamped_seq` and `last_external_timestamp_at`.
+
+`gap_register.csv` starts with one `# key: value` line per header field
+(plus `generated_at`), then a CSV table with the columns `gap_id`, `code`,
+`wording`, `framework`, `clause`, `artefact_id`, `ledger_seqs` (seq numbers
+joined by `;`), `suggested_cause`, `suggested_owner`, `assigned_cause`,
+`assigned_owner`, `assignment_seq` and `status`. Gap codes: `GAP-EV-01`,
+`GAP-PROV-01`, `GAP-IND-01`, `GAP-VER-01`, `GAP-TCR-01`, `GAP-MAP-01`,
+`GAP-TS-01`.
+
+A verifier MUST check, when a register is present:
+
+- the CSV header equals `manifest.gap_register`;
+- the entry at `scope_seq` is a `scope.agreed` entry whose `content_hash` is
+  `scope_hash`;
+- `ruleset_digest` is the digest of the latest `ruleset.published` entry;
+- `ledger_head` and `ledger_head_seq` are the bundle's head;
+- `last_externally_timestamped_seq` equals `manifest.timestamps`;
+- every row cites only seqs present in the bundle, has a known code and
+  wording starting "Evidence not found:"; a row naming an artefact cites an
+  entry whose subject is that artefact; a row naming a clause cites the
+  scope entry and the clause is in that scope;
+- a row with `assignment_seq` matches the latest `gap.assigned` entry for its
+  `gap_id` (same cause, status `assigned`); a row without one has no
+  recorded assignment and status `unassigned`.
+
+The verifier checks the rows against the ledger; it does not recompute the
+register.
+
+## 10. Charter mode
 
 To verify a Neutrality Charter version: the bundle's ledger MUST hold a
 `charter.recorded` entry (version 1 name: `charter.published`) whose payload
 `version` is the requested version and whose `charter_sha256` equals the
 SHA-256 of the charter file. The latest such entry counts.
 
-## 10. Verifier output contract
+## 11. Verifier output contract
 
 A conforming verifier:
 
@@ -280,10 +315,10 @@ A conforming verifier:
 
 Check ids: `manifest-files`, `chain-hashes`, `sequence-continuity`,
 `declared-filter`, `void-entries`, `projection`, `subject-type-boundary`,
-`signatures`, `anchors`, `timestamps`, `pdf-continuity`, and `charter` in
-charter mode.
+`signatures`, `anchors`, `timestamps`, `pdf-continuity`, `gap-register`, and
+`charter` in charter mode.
 
-## 11. Test vectors
+## 12. Test vectors
 
 The Domokos product generates the test vectors for this version: one valid
 bundle and one bundle per operator-tamper probe, each rebuilt consistently

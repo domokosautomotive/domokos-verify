@@ -55,6 +55,7 @@ Every check runs even after a problem:
 | Anchors and RFC 3161 timestamp tokens | each anchor matches the chain; each external anchor holds tokens from two different timestamp authorities; each token is fully verified against a pinned root |
 | External timestamp coverage | the last externally timestamped entry, every later entry, and any entry timestamped later than 15 minutes after capture |
 | PDF continuity statement | the human-readable document and the verifiable record tell the same story |
+| Gap register | when the bundle carries one, every row cites ledger entries that exist and concern its artefact or in-scope clause; the header's scope hash, ruleset digest, ledger head and latest external timestamp match the ledger; assignments match their ledger entries |
 
 ## Pinned roots and strict mode
 

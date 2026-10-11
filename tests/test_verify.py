@@ -222,7 +222,7 @@ class OutputTest(unittest.TestCase):
         self.assertEqual({c["id"] for c in report["checks"]},
                          {"manifest-files", "chain-hashes", "sequence-continuity", "declared-filter",
                           "void-entries", "projection", "subject-type-boundary", "signatures", "anchors",
-                          "timestamps", "pdf-continuity"})
+                          "timestamps", "pdf-continuity", "gap-register"})
 
     def test_unreadable_bundle_is_reported(self):
         rep = dv.verify_bundle(os.path.join(VECTORS, "expected.json"))
