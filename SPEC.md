@@ -27,7 +27,7 @@ All JSON is UTF-8. All hashes are lowercase hex SHA-256 unless stated.
 ## 0. Manifest
 
 `manifest.json` MUST carry `"bundle_format": "domokos-bundle/2"`,
-`"spec_version": "2.0.0"`, `"hash_scheme": 2` and `"projection_version": 1`.
+`"spec_version": "2.0.0"`, `"hash_scheme": 2` and `"projection_version": 2`.
 `files` maps every other file name to `{"sha256", "bytes"}`; every listed
 file MUST be present and match. `scope` is
 `{"kind": "requirement", "requirement_id": R}`.
@@ -109,41 +109,45 @@ The running hash at seq n is the `content_hash` recomputed at n.
 ## 4. Artefact projection
 
 An artefact record is the result of folding ledger entries through the pure
-function `apply(records, entry, text_for)` below, version 1. `text_for(h)`
-returns the text whose SHA-256 over its UTF-8 bytes is `h`; a missing text or
-a text with a different hash is an error. Copies are deep.
+function `apply(records, entry, text_for)` below, projection version 2.
+`text_for(h)` returns the text whose SHA-256 over its UTF-8 bytes is `h`; a
+missing text or a text with a different hash is an error. Copies are deep;
+`at` is the entry's `captured_at`.
+
+**`artefact.captured`** `{"artefact": A}` creates record `A.id` (an id
+captured twice is an error). The record is A itself, plus:
+
+- `content` = `text_for(A.content_sha256)`;
+- `provenance.prompt` = `parse(text_for(A.provenance.prompt_sha256))`, or
+  null when that hash is null or absent;
+- `provenance.raw_response` = `text_for(A.provenance.raw_response_sha256)`,
+  or null when that hash is null or absent;
+- `captured_at` = `at`; `provenance_status` = `A.provenance.status` (null
+  when absent);
+- the lifecycle defaults: `regulatory_mappings` `[]`, `misra_findings` `[]`,
+  `flags` `[]`, `review` null, `attestation` null, `audit_state` `"draft"`,
+  `provenance_amendments` `[]`.
+
+Every other event below names `artefact_id`; an id not yet captured is an
+error.
 
 | `event_type` | Payload | Effect |
 |---|---|---|
-| `artefact.captured` | `{"artefact": A}` | Creates record `A.id` (an id captured twice is an error) |
 | `mapping.suggested` | `{"artefact_id", "mappings"}` | `regulatory_mappings` = `mappings` |
-| `artefact.flagged` | `{"artefact_id", "finding": {"code", "detail", "blocking"}}` | appends `{"code", "detail", "blocking", "raised_at": captured_at, "resolved_at": null}` to `flags` |
-| `artefact.finding_resolved` | `{"artefact_id", "code", "reason"}` | sets `resolved_at` = `captured_at` on every flag with that code and `resolved_at` null |
-| `artefact.reviewed` | `{"artefact_id", "review", "independence", "audit_state", "signature"}` | `review` = `review` plus `"recorded_at": captured_at`, `"independence"`, `"signature"`; `audit_state` = payload `audit_state` |
+| `artefact.flagged` | `{"artefact_id", "finding": {"code", "detail", "blocking"}}` | appends `{"code", "detail", "blocking", "raised_at": at, "resolved_at": null, "waiver": null}` to `flags` |
+| `artefact.finding_resolved` | `{"artefact_id", "code", "reason"}` | sets `resolved_at` = `at` on every flag with that code and `resolved_at` null |
+| `finding.waived` | `{"artefact_id", "code", "waived_by", "waived_by_person_id", "rationale"}` | on every flag with that code, `resolved_at` null and `waiver` null: `waiver` = `{"waived_by", "waived_by_person_id", "rationale", "recorded_at": at}` |
+| `artefact.reviewed` | `{"artefact_id", "review", "independence", "audit_state", "signature"}` | `review` = payload `review` plus `"recorded_at": at`, `"independence"`, `"signature"`; `audit_state` = payload `audit_state` |
 | `artefact.misra_scanned` | `{"artefact_id", "findings"}` | `misra_findings` = `findings` |
-| `artefact.attested` | `{"artefact_id", "attester_id", "signature"}` | `audit_state` = `"attested"`; `attestation` = `{"attester_id", "recorded_at": captured_at, "signature"}` |
+| `artefact.attested` | `{"artefact_id", "attester_id", ..., "signature"}` | `audit_state` = `"attested"`; `attestation` = the payload without `artefact_id`, plus `"recorded_at": at` |
+| `provenance.amended` | `{"artefact_id", "fields", "reason", "amended_by", "amended_by_person_id", "provenance_status"}` | appends `{"fields", "reason", "amended_by", "amended_by_person_id", "recorded_at": at}` to `provenance_amendments`, where `fields` also gets `prompt` = `parse(text_for(fields.prompt_sha256))` and `raw_response` = `text_for(fields.raw_response_sha256)` when those hashes are present; `provenance_status` = payload `provenance_status` |
 
-Every other event type changes no record. An event that names an artefact id
-not yet captured is an error. `captured_at` is the entry's.
-
-The record created by `artefact.captured`:
-
-```
-{"id": A.id, "schema_version": A.schema_version, "kind": A.kind,
- "subject_type": A.subject_type, "title": A.title, "language": A.language,
- "file_path": A.file_path,
- "content": text_for(A.content_sha256), "content_sha256": A.content_sha256,
- "actor": A.actor,
- "provenance": A.provenance + {"prompt": parse(text_for(A.provenance.prompt_sha256)),
-                               "raw_response": text_for(A.provenance.raw_response_sha256)},
- "captured_at": captured_at, "requirement_links": A.requirement_links, "tags": A.tags,
- "regulatory_mappings": [], "misra_findings": [], "flags": [],
- "review": null, "attestation": null, "audit_state": "draft"}
-```
+Every other event type changes no record.
 
 **Reconciliation.** For the bundle, `text_for` is built from `artefacts.json`
-alone: for each record, its `content`, `canonical(provenance.prompt)` and
-`provenance.raw_response`, keyed by their SHA-256. The verifier folds every
+alone: for each record, its `content`, `canonical(provenance.prompt)`,
+`provenance.raw_response` and the `prompt` (canonical) and `raw_response` of
+each provenance amendment, keyed by their SHA-256; null values are skipped. The verifier folds every
 entry whose subject (§3) is the id of a record in `artefacts.json`, then:
 
 - every record in `artefacts.json` MUST equal the rebuilt record (compared as

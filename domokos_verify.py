@@ -36,7 +36,11 @@ __version__ = "2.0.0"
 SPEC = "domokos-bundle/2"
 SPEC_VERSION = "2.0.0"
 HASH_SCHEME = 2
-PROJECTION_VERSION = 1
+PROJECTION_VERSION = 2
+LIFECYCLE_DEFAULTS: Dict[str, Any] = {
+    "regulatory_mappings": [], "misra_findings": [], "flags": [], "review": None, "attestation": None,
+    "audit_state": "draft", "provenance_amendments": [],
+}
 GENESIS = "0" * 64
 LEGACY_SIGNATURE_MARKER = "LEGACY-UNSIGNED"
 SIGNATURE_KIND = "platform attestation (server-held key)"
@@ -694,28 +698,25 @@ def _text(text_for: Callable[[str], Optional[str]], sha: str, what: str) -> str:
 
 
 def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Callable[[str], Optional[str]]) -> None:
+    """SPEC §4, projection version 2."""
     t, p, at = e["event_type"], e["payload"], e["captured_at"]
     if t == "artefact.captured":
         a = p["artefact"]
         if a["id"] in records:
             raise ProjectionError(f"artefact {a['id']} captured twice")
-        prov = copy.deepcopy(a["provenance"])
-        prov["prompt"] = json.loads(_text(text_for, prov["prompt_sha256"], f"{a['id']} prompt"))
-        prov["raw_response"] = _text(text_for, prov["raw_response_sha256"], f"{a['id']} raw response")
-        records[a["id"]] = {
-            "id": a["id"], "schema_version": a["schema_version"], "kind": a["kind"],
-            "subject_type": a["subject_type"], "title": a["title"], "language": a["language"],
-            "file_path": a["file_path"],
-            "content": _text(text_for, a["content_sha256"], f"{a['id']} content"),
-            "content_sha256": a["content_sha256"], "actor": copy.deepcopy(a["actor"]),
-            "provenance": prov, "captured_at": at,
-            "requirement_links": copy.deepcopy(a["requirement_links"]), "tags": list(a["tags"]),
-            "regulatory_mappings": [], "misra_findings": [], "flags": [],
-            "review": None, "attestation": None, "audit_state": "draft",
-        }
+        rec = copy.deepcopy(a)
+        rec["content"] = _text(text_for, a["content_sha256"], f"{a['id']} content")
+        prov = rec["provenance"]
+        prov["prompt"] = (json.loads(_text(text_for, prov["prompt_sha256"], f"{a['id']} prompt"))
+                          if prov.get("prompt_sha256") else None)
+        prov["raw_response"] = (_text(text_for, prov["raw_response_sha256"], f"{a['id']} raw response")
+                                if prov.get("raw_response_sha256") else None)
+        rec["captured_at"] = at
+        rec["provenance_status"] = prov.get("status")
+        rec.update(copy.deepcopy(LIFECYCLE_DEFAULTS))
+        records[a["id"]] = rec
         return
-    if t not in ("mapping.suggested", "artefact.flagged", "artefact.finding_resolved", "artefact.reviewed",
-                 "artefact.misra_scanned", "artefact.attested"):
+    if t not in LIFECYCLE_EVENTS:
         return
     rec = records.get(p["artefact_id"])
     if rec is None:
@@ -725,11 +726,16 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
     elif t == "artefact.flagged":
         f = p["finding"]
         rec["flags"].append({"code": f["code"], "detail": f["detail"], "blocking": f["blocking"],
-                             "raised_at": at, "resolved_at": None})
+                             "raised_at": at, "resolved_at": None, "waiver": None})
     elif t == "artefact.finding_resolved":
         for f in rec["flags"]:
             if f["code"] == p["code"] and f["resolved_at"] is None:
                 f["resolved_at"] = at
+    elif t == "finding.waived":
+        for f in rec["flags"]:
+            if f["code"] == p["code"] and f["resolved_at"] is None and f["waiver"] is None:
+                f["waiver"] = {"waived_by": p["waived_by"], "waived_by_person_id": p["waived_by_person_id"],
+                               "rationale": p["rationale"], "recorded_at": at}
     elif t == "artefact.reviewed":
         review = copy.deepcopy(p["review"])
         review["recorded_at"] = at
@@ -741,8 +747,21 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
         rec["misra_findings"] = copy.deepcopy(p["findings"])
     elif t == "artefact.attested":
         rec["audit_state"] = "attested"
-        rec["attestation"] = {"attester_id": p["attester_id"], "recorded_at": at,
-                              "signature": copy.deepcopy(p["signature"])}
+        rec["attestation"] = {k: copy.deepcopy(v) for k, v in p.items() if k != "artefact_id"}
+        rec["attestation"]["recorded_at"] = at
+    elif t == "provenance.amended":
+        fields = copy.deepcopy(p["fields"])
+        if fields.get("prompt_sha256"):
+            fields["prompt"] = json.loads(_text(text_for, fields["prompt_sha256"], f"{rec['id']} amended prompt"))
+        if fields.get("raw_response_sha256"):
+            fields["raw_response"] = _text(text_for, fields["raw_response_sha256"], f"{rec['id']} amended raw response")
+        rec["provenance_amendments"].append({"fields": fields, "reason": p["reason"], "amended_by": p["amended_by"],
+                                             "amended_by_person_id": p["amended_by_person_id"], "recorded_at": at})
+        rec["provenance_status"] = p["provenance_status"]
+
+
+LIFECYCLE_EVENTS = ("mapping.suggested", "artefact.flagged", "artefact.finding_resolved", "finding.waived",
+                    "artefact.reviewed", "artefact.misra_scanned", "artefact.attested", "provenance.amended")
 
 
 # ===========================================================================
@@ -905,7 +924,13 @@ def check_projection(b: Bundle, rep: Report) -> None:
     try:
         for rec in b.artefacts:
             prov = rec["provenance"]
-            for text in (rec["content"], canonical(prov["prompt"]), prov["raw_response"]):
+            candidates = [rec["content"], prov.get("prompt"), prov.get("raw_response")]
+            for amendment in rec.get("provenance_amendments", []):
+                candidates += [amendment["fields"].get("prompt"), amendment["fields"].get("raw_response")]
+            for value in candidates:
+                if value is None:
+                    continue
+                text = value if isinstance(value, str) else canonical(value)
                 texts[sha256_hex(text.encode("utf-8"))] = text
         ids = {rec["id"] for rec in b.artefacts}
     except (KeyError, TypeError, CanonicalError, AttributeError) as exc:
