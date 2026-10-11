@@ -39,7 +39,7 @@ HASH_SCHEME = 2
 PROJECTION_VERSION = 2
 LIFECYCLE_DEFAULTS: Dict[str, Any] = {
     "regulatory_mappings": [], "misra_findings": [], "flags": [], "review": None, "attestation": None,
-    "audit_state": "draft", "provenance_amendments": [], "trace_links": [],
+    "audit_state": "draft", "provenance_amendments": [], "trace_links": [], "mapping_history": [],
 }
 GENESIS = "0" * 64
 LEGACY_SIGNATURE_MARKER = "LEGACY-UNSIGNED"
@@ -722,7 +722,17 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
     if rec is None:
         raise ProjectionError(f"{t} at seq {e['seq']} names unknown artefact {p['artefact_id']}")
     if t == "mapping.suggested":
+        for old in rec["regulatory_mappings"]:
+            old["superseded_at"] = at
+            rec["mapping_history"].append(old)
         rec["regulatory_mappings"] = copy.deepcopy(p["mappings"])
+    elif t == "mapping.decided":
+        mapping = next((m for m in rec["regulatory_mappings"] if m.get("mapping_id") == p["mapping_id"]), None)
+        if mapping is None:
+            raise ProjectionError(f"mapping {p['mapping_id']} is not a current suggestion on {rec['id']}")
+        mapping["status"] = p["decision"]
+        mapping["decision"] = {"decided_by": p["decided_by"], "decided_by_person_id": p["decided_by_person_id"],
+                               "rationale": p["rationale"], "recorded_at": at}
     elif t == "artefact.flagged":
         f = p["finding"]
         rec["flags"].append({"code": f["code"], "detail": f["detail"], "blocking": f["blocking"],
@@ -764,7 +774,7 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
         rec["provenance_status"] = p["provenance_status"]
 
 
-LIFECYCLE_EVENTS = ("mapping.suggested", "artefact.flagged", "artefact.finding_resolved", "finding.waived",
+LIFECYCLE_EVENTS = ("mapping.suggested", "mapping.decided", "artefact.flagged", "artefact.finding_resolved", "finding.waived",
                     "artefact.reviewed", "artefact.misra_scanned", "artefact.attested", "provenance.amended",
                     "link.added")
 

@@ -126,14 +126,15 @@ captured twice is an error). The record is A itself, plus:
   when absent);
 - the lifecycle defaults: `regulatory_mappings` `[]`, `misra_findings` `[]`,
   `flags` `[]`, `review` null, `attestation` null, `audit_state` `"draft"`,
-  `provenance_amendments` `[]`, `trace_links` `[]`.
+  `provenance_amendments` `[]`, `trace_links` `[]`, `mapping_history` `[]`.
 
 Every other event below names `artefact_id`; an id not yet captured is an
 error.
 
 | `event_type` | Payload | Effect |
 |---|---|---|
-| `mapping.suggested` | `{"artefact_id", "mappings"}` | `regulatory_mappings` = `mappings` |
+| `mapping.suggested` | `{"artefact_id", "mappings", "ruleset_digest", "reason"}` | each current suggestion gets `"superseded_at": at` and is appended to `mapping_history`; then `regulatory_mappings` = `mappings` |
+| `mapping.decided` | `{"artefact_id", "mapping_id", "decision", "decided_by", "decided_by_person_id", "rationale"}` | on the current suggestion with that `mapping_id` (none is an error): `status` = `decision`; `decision` = `{"decided_by", "decided_by_person_id", "rationale", "recorded_at": at}` |
 | `artefact.flagged` | `{"artefact_id", "finding": {"code", "detail", "blocking"}}` | appends `{"code", "detail", "blocking", "raised_at": at, "resolved_at": null, "waiver": null}` to `flags` |
 | `artefact.finding_resolved` | `{"artefact_id", "code", "reason"}` | sets `resolved_at` = `at` on every flag with that code and `resolved_at` null |
 | `finding.waived` | `{"artefact_id", "code", "waived_by", "waived_by_person_id", "rationale"}` | on every flag with that code, `resolved_at` null and `waiver` null: `waiver` = `{"waived_by", "waived_by_person_id", "rationale", "recorded_at": at}` |
