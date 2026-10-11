@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "domokos-verify"
+version = "2.0.0"
+description = "Independent verifier for Domokos evidence bundles (bundle spec 2.0)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+# The core is standard library only. pyca/cryptography is the single
+# dependency, used to verify RFC 3161 timestamp-token signatures and chains.
+dependencies = ["cryptography>=42"]
+authors = [{ name = "Domokos Automotive" }]
+keywords = ["verification", "rfc3161", "timestamp", "evidence", "hash-chain"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+
+[project.urls]
+Homepage = "https://github.com/domokosautomotive/domokos-verify"
+Specification = "https://github.com/domokosautomotive/domokos-verify/blob/main/SPEC.md"
+
+[project.scripts]
+domokos-verify = "domokos_verify:main"
+
+[tool.setuptools]
+py-modules = ["domokos_verify"]

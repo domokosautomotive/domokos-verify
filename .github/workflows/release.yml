@@ -1,0 +1,57 @@
+name: Release
+
+# Publishes to PyPI with trusted publishing (OpenID Connect): no API token
+# exists anywhere. Runs only for a signed tag v* whose version matches
+# pyproject.toml. See README "Release" for the one-time founder setup.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag is signed and matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          git cat-file tag "$tag" | grep -Eq -- "-----BEGIN (SSH|PGP) SIGNATURE-----" \
+            || { echo "tag $tag is not signed"; exit 1; }
+          if [ -f .github/allowed_signers ]; then
+            git config gpg.ssh.allowedSignersFile .github/allowed_signers
+            git verify-tag "$tag"
+          fi
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          [ "v$version" = "$tag" ] || { echo "tag $tag does not match version $version"; exit 1; }
+      - name: Tests
+        run: |
+          python -m pip install "cryptography>=42" build
+          python -m unittest discover -s tests -v
+      - name: Build
+        run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

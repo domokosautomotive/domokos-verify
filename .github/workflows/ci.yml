@@ -4,16 +4,55 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.12"]
+        python-version: ["3.9", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Tests (stdlib only — no pip install, that is the point)
-        run: python -m unittest discover -s tests
+      - name: Install the single dependency (RFC 3161 token signatures)
+        run: python -m pip install "cryptography>=42"
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+
+  stdlib-only:
+    # The core must run on the standard library alone; token signatures are
+    # then reported as unverified (strict mode fails, --no-strict reports).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tests without pyca/cryptography
+        run: |
+          python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('cryptography') is not None)"
+          python -m unittest discover -s tests -v
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Install the wheel in a clean venv and verify the valid vector
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/clean/bin/domokos-verify "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/valid.zip" \
+            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/roots/vector-tsa-ec-root.pem" \
+            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/roots/vector-tsa-rsa-root.pem"
