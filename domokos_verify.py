@@ -39,7 +39,7 @@ HASH_SCHEME = 2
 PROJECTION_VERSION = 2
 LIFECYCLE_DEFAULTS: Dict[str, Any] = {
     "regulatory_mappings": [], "misra_findings": [], "flags": [], "review": None, "attestation": None,
-    "audit_state": "draft", "provenance_amendments": [],
+    "audit_state": "draft", "provenance_amendments": [], "trace_links": [],
 }
 GENESIS = "0" * 64
 LEGACY_SIGNATURE_MARKER = "LEGACY-UNSIGNED"
@@ -749,6 +749,10 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
         rec["audit_state"] = "attested"
         rec["attestation"] = {k: copy.deepcopy(v) for k, v in p.items() if k != "artefact_id"}
         rec["attestation"]["recorded_at"] = at
+    elif t == "link.added":
+        link = {k: copy.deepcopy(v) for k, v in p.items() if k != "artefact_id"}
+        link["recorded_at"] = at
+        rec["trace_links"].append(link)
     elif t == "provenance.amended":
         fields = copy.deepcopy(p["fields"])
         if fields.get("prompt_sha256"):
@@ -761,7 +765,8 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
 
 
 LIFECYCLE_EVENTS = ("mapping.suggested", "artefact.flagged", "artefact.finding_resolved", "finding.waived",
-                    "artefact.reviewed", "artefact.misra_scanned", "artefact.attested", "provenance.amended")
+                    "artefact.reviewed", "artefact.misra_scanned", "artefact.attested", "provenance.amended",
+                    "link.added")
 
 
 # ===========================================================================
@@ -956,10 +961,14 @@ def check_projection(b: Bundle, rep: Report) -> None:
     requirement = b.manifest.get("scope", {}).get("requirement_id")
     linked = set()
     for e in b.entries:
-        if e["event_type"] == "artefact.captured" and isinstance(e["payload"], dict):
+        if not isinstance(e["payload"], dict):
+            continue
+        if e["event_type"] == "artefact.captured":
             a = e["payload"].get("artefact", {})
             if any(link.get("requirement_id") == requirement for link in a.get("requirement_links", [])):
                 linked.add(a.get("id"))
+        elif e["event_type"] == "link.added" and e["payload"].get("target_requirement_id") == requirement:
+            linked.add(e["payload"].get("artefact_id"))
     declared = set(b.continuity.get("filter", {}).get("predicate", {}).get("artefact_ids", []))
     if not (ids == declared == linked):
         problems.append(f"scope is incomplete or inconsistent for requirement {requirement}: "

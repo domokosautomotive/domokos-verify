@@ -126,7 +126,7 @@ captured twice is an error). The record is A itself, plus:
   when absent);
 - the lifecycle defaults: `regulatory_mappings` `[]`, `misra_findings` `[]`,
   `flags` `[]`, `review` null, `attestation` null, `audit_state` `"draft"`,
-  `provenance_amendments` `[]`.
+  `provenance_amendments` `[]`, `trace_links` `[]`.
 
 Every other event below names `artefact_id`; an id not yet captured is an
 error.
@@ -140,6 +140,7 @@ error.
 | `artefact.reviewed` | `{"artefact_id", "review", "independence", "audit_state", "signature"}` | `review` = payload `review` plus `"recorded_at": at`, `"independence"`, `"signature"`; `audit_state` = payload `audit_state` |
 | `artefact.misra_scanned` | `{"artefact_id", "findings"}` | `misra_findings` = `findings` |
 | `artefact.attested` | `{"artefact_id", "attester_id", ..., "signature"}` | `audit_state` = `"attested"`; `attestation` = the payload without `artefact_id`, plus `"recorded_at": at` |
+| `link.added` | `{"artefact_id", "link_id", "link_type", "target_artefact_id", "target_requirement_id", "added_by", "added_by_person_id"}` | appends the payload without `artefact_id`, plus `"recorded_at": at`, to `trace_links` |
 | `provenance.amended` | `{"artefact_id", "fields", "reason", "amended_by", "amended_by_person_id", "provenance_status"}` | appends `{"fields", "reason", "amended_by", "amended_by_person_id", "recorded_at": at}` to `provenance_amendments`, where `fields` also gets `prompt` = `parse(text_for(fields.prompt_sha256))` and `raw_response` = `text_for(fields.raw_response_sha256)` when those hashes are present; `provenance_status` = payload `provenance_status` |
 
 Every other event type changes no record.
@@ -154,8 +155,10 @@ entry whose subject (§3) is the id of a record in `artefacts.json`, then:
   canonical JSON), so every text hashes to the value its `artefact.captured`
   entry recorded and every lifecycle field follows from the ledger;
 - **scope is complete:** the ids in `artefacts.json`, the filter's
-  `artefact_ids`, and the ids of every `artefact.captured` whose
-  `requirement_links` include `scope.requirement_id` MUST be the same set.
+  `artefact_ids`, and the ids of every artefact linked to
+  `scope.requirement_id` (an `artefact.captured` whose `requirement_links`
+  include it, or the `artefact_id` of a `link.added` whose
+  `target_requirement_id` is it) MUST be the same set.
 
 **Schema boundary.** Every `artefact.captured` artefact MUST have
 `schema_version` ≥ 3 and `subject_type` `"work_product"`; `schema_version`
