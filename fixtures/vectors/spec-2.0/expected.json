@@ -1,0 +1,86 @@
+{
+  "spec": "domokos-bundle/2",
+  "generated_by": "domokos scripts/make_test_vectors.py",
+  "tsa_roots": [
+    "roots/vector-tsa-ec-root.pem",
+    "roots/vector-tsa-rsa-root.pem"
+  ],
+  "charter": {
+    "file": "charter-2.0.0.md",
+    "version": "2.0.0"
+  },
+  "vectors": {
+    "valid.zip": {
+      "must_fail": [],
+      "what": "untouched export"
+    },
+    "resign.zip": {
+      "must_fail": [
+        "projection",
+        "signatures"
+      ],
+      "what": "artefact content edited in artefacts.json and re-signed with a new key"
+    },
+    "forged_attestation.zip": {
+      "must_fail": [
+        "projection"
+      ],
+      "what": "artefacts.json marks an unattested artefact as attested"
+    },
+    "downgrade.zip": {
+      "must_fail": [
+        "signatures",
+        "anchors"
+      ],
+      "what": "an artefact signature replaced by the legacy marker, chain rehashed"
+    },
+    "truncate.zip": {
+      "must_fail": [
+        "anchors"
+      ],
+      "what": "entries at and below an anchored seq removed"
+    },
+    "rehash.zip": {
+      "must_fail": [
+        "anchors"
+      ],
+      "what": "one payload edited and every later hash recomputed"
+    },
+    "faketsa.zip": {
+      "must_fail": [
+        "anchors"
+      ],
+      "what": "rehashed, anchors moved to the new head with random tokens holding the imprint"
+    },
+    "unpinned_tsa.zip": {
+      "must_fail": [
+        "anchors"
+      ],
+      "what": "rehashed and re-anchored by the operator's own timestamp authorities"
+    },
+    "pipe_collision.zip": {
+      "must_fail": [
+        "chain-hashes"
+      ],
+      "what": "field boundary moved across a '|', which kept the scheme-1 hash"
+    },
+    "noncanonical.zip": {
+      "must_fail": [
+        "chain-hashes"
+      ],
+      "what": "a payload re-serialised with whitespace (same values)"
+    },
+    "hidden_artefact.zip": {
+      "must_fail": [
+        "projection"
+      ],
+      "what": "an in-scope artefact removed from artefacts.json and from the filter"
+    },
+    "anchor_downgrade.zip": {
+      "must_fail": [
+        "timestamps"
+      ],
+      "what": "the external anchor relabelled local and its tokens dropped"
+    }
+  }
+}

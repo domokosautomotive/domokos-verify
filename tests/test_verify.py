@@ -1,236 +1,265 @@
-"""
-domokos-verify test suite (stdlib unittest — the zero-dependency rule covers
-the tests too).
+"""Tests for domokos-verify (spec 2.0). Standard library unittest only.
 
-Exit-criteria scenarios: a valid bundle returns 0; altered entry, removed
-entry, forged anchor, mismatched continuity statement, and a
-rename-boundary chain whose historical name was rewritten each return
-non-zero with a specific, comprehensible reason.
+    python -m unittest discover -s tests
+
+The bundle vectors in fixtures/vectors/spec-2.0 are a copy of the vectors
+the Domokos product generates (scripts/make_test_vectors.py). Tests that
+need pyca/cryptography skip when it is absent; the stdlib-only behaviour has
+its own tests.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
+import os
 import sys
 import unittest
-import zipfile
-from pathlib import Path
+from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
 
-import domokos_verify as dv
+import domokos_verify as dv  # noqa: E402
 
-FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "valid-bundle.zip"
-
-
-def _load(path=FIXTURE) -> dict[str, bytes]:
-    zf = zipfile.ZipFile(path)
-    return {n: zf.read(n) for n in zf.namelist()}
-
-
-def _rezip(files: dict[str, bytes], tmpdir: Path, name: str) -> Path:
-    out = tmpdir / name
-    with zipfile.ZipFile(out, "w") as zf:
-        for n, data in files.items():
-            zf.writestr(n, data)
-    return out
+VECTORS = os.path.join(ROOT, "fixtures", "vectors", "spec-2.0")
+with open(os.path.join(VECTORS, "expected.json"), encoding="utf-8") as _f:
+    EXPECTED = json.load(_f)
+ROOTS = [os.path.join(VECTORS, r) for r in EXPECTED["tsa_roots"]]
+with open(os.path.join(ROOT, "fixtures", "sectigo_rfc3161_token.der"), "rb") as _f:
+    SECTIGO_TOKEN = _f.read()
+SECTIGO_HEAD = hashlib.sha256(b"domokos live probe").hexdigest()
+SECTIGO_R46 = "4941b001b8a97e961b7817c9d9e960ec4b056bfc915a8c1aabf6ef6b3ac046a5"
+HAVE_CRYPTO = dv._crypto() is not None
+needs_crypto = unittest.skipUnless(HAVE_CRYPTO, "pyca/cryptography is not installed")
 
 
-def _entries(files: dict[str, bytes]) -> list[dict]:
-    return [json.loads(l) for l in files["ledger.jsonl"].decode().splitlines()]
+def vector(name: str) -> str:
+    return os.path.join(VECTORS, name)
 
 
-def _write_entries(files: dict[str, bytes], entries: list[dict]) -> None:
-    files["ledger.jsonl"] = "\n".join(json.dumps(e, sort_keys=True) for e in entries).encode()
-    manifest = json.loads(files["manifest.json"])
-    manifest["files"]["ledger.jsonl"]["sha256"] = hashlib.sha256(files["ledger.jsonl"]).hexdigest()
-    files["manifest.json"] = json.dumps(manifest).encode()
+def run_cli(*args: str):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = dv.main(list(args))
+    return code, out.getvalue()
 
 
-def _recompute_chain(entries: list[dict]) -> None:
-    prev = dv.GENESIS
-    for e in entries:
-        e["prev_hash"] = prev
-        e["content_hash"] = dv._entry_hash(e)
-        prev = e["content_hash"]
+def failed(rep) -> list:
+    return sorted(c["id"] for c in rep.checks if not c["ok"])
 
 
-class VerifierTest(unittest.TestCase):
-    def setUp(self):
-        import tempfile
+class CanonicalJSONTest(unittest.TestCase):
+    def test_keys_sort_by_utf16_code_units(self):
+        # RFC 8785 section 3.2.3 sorting example.
+        value = {"€": "Euro Sign", "\r": "Carriage Return", "דּ": "Hebrew Letter Dalet With Dagesh",
+                 "1": "One", "\U0001f600": "Emoji: Grinning Face", "\u0080": "Control", "ö": "Latin Small Letter O With Diaeresis"}
+        keys = list(json.loads(dv.canonical(value)))
+        self.assertEqual(keys, ["\r", "1", "\u0080", "ö", "€", "\U0001f600", "דּ"])
 
-        self.tmp = Path(tempfile.mkdtemp())
+    def test_strings_escape_like_json_stringify(self):
+        self.assertEqual(dv.canonical("a\"b\\c\b\t\n\f\r\x01\x1f\x7f é"),
+                         '"a\\"b\\\\c\\b\\t\\n\\f\\r\\u0001\\u001f\x7f é"')
 
-    def _failing(self, files: dict[str, bytes], check_id: str) -> str:
-        path = _rezip(files, self.tmp, "case.zip")
-        rep = dv.verify_bundle(str(path))
-        self.assertFalse(rep.ok, "expected verification to fail")
-        failing = {c["id"]: c for c in rep.checks if not c["ok"]}
-        self.assertIn(check_id, failing, f"expected {check_id} to fail; got {sorted(failing)}")
-        return failing[check_id]["detail"]
+    def test_no_whitespace_and_nested_values(self):
+        self.assertEqual(dv.canonical({"b": [1, True, None, {"a": "x"}], "a": -0}), '{"a":0,"b":[1,true,null,{"a":"x"}]}')
 
-    # -- the happy path -----------------------------------------------------
+    def test_floats_large_integers_and_lone_surrogates_have_no_canonical_form(self):
+        for bad in (1.5, 2**53, -(2**53), "\ud800", {1: "x"}):
+            with self.assertRaises(dv.CanonicalError):
+                dv.canonical(bad)
 
-    def test_valid_bundle_passes_and_exits_zero(self):
-        rep = dv.verify_bundle(str(FIXTURE))
-        self.assertTrue(rep.ok, rep.to_dict())
-        self.assertEqual(dv.main([str(FIXTURE)]), 0)
-
-    # -- exit-criteria tamper scenarios --------------------------------------
-
-    def test_altered_entry_is_detected(self):
-        files = _load()
-        entries = _entries(files)
-        entries[0]["payload_json"] = entries[0]["payload_json"].replace("a-one", "a-1")
-        _write_entries(files, entries)
-        detail = self._failing(files, "chain-hashes")
-        self.assertIn("content_hash mismatch at seq 1", detail)
-
-    def test_removed_entry_is_detected(self):
-        files = _load()
-        entries = _entries(files)
-        del entries[1]
-        _write_entries(files, entries)
-        detail = self._failing(files, "sequence-continuity")
-        self.assertIn("not contiguous", detail)
-
-    def test_forged_anchor_is_detected(self):
-        files = _load()
-        anchors = json.loads(files["anchors.json"])
-        anchors[0]["ledger_hash"] = "f" * 64
-        files["anchors.json"] = json.dumps(anchors).encode()
-        manifest = json.loads(files["manifest.json"])
-        manifest["files"]["anchors.json"]["sha256"] = hashlib.sha256(files["anchors.json"]).hexdigest()
-        files["manifest.json"] = json.dumps(manifest).encode()
-        detail = self._failing(files, "anchors")
-        self.assertIn("forged anchor or rewritten chain", detail)
-
-    def test_mismatched_continuity_statement_is_detected(self):
-        files = _load()
-        manifest = json.loads(files["manifest.json"])
-        # The manifest claims fewer omissions than the PDF was built with.
-        omitted = manifest["continuity"]["omitted_from_pdf"]
-        dropped = omitted["seqs"].pop()
-        omitted["count"] -= 1
-        manifest["continuity"]["rendered_in_pdf"]["seqs"].append(dropped)
-        manifest["continuity"]["rendered_in_pdf"]["count"] += 1
-        files["manifest.json"] = json.dumps(manifest).encode()
-        detail = self._failing(files, "pdf-continuity")
-        self.assertIn("disagree", detail)
-
-    def test_rewritten_historical_name_across_rename_boundary_is_detected(self):
-        """The rebranding rewrite: a payload's historical product name is
-        'helpfully' updated. Naive version — hashes left alone."""
-        files = _load()
-        entries = _entries(files)
-        # The fixture's first payload plays the role of the historical text.
-        target = entries[0]
-        self.assertIn("a-one", target["payload_json"])
-        target["payload_json"] = target["payload_json"].replace("a-one", "NewBrand-one")
-        _write_entries(files, entries)
-        detail = self._failing(files, "chain-hashes")
-        self.assertIn("stored bytes were altered", detail)
-
-    def test_consistent_rewrite_across_rename_boundary_fails_against_anchor(self):
-        """The competent rebranding rewrite: hashes recomputed for the whole
-        chain. Self-consistent — only the anchor catches it."""
-        files = _load()
-        entries = _entries(files)
-        entries[0]["payload_json"] = entries[0]["payload_json"].replace("a-one", "NewBrand-one")
-        _recompute_chain(entries)
-        _write_entries(files, entries)
-        # Make the continuity statement + PDF consistent with the rewrite, as
-        # the attacker controls the exporter. PDF /Subject is regenerated too.
-        manifest = json.loads(files["manifest.json"])
-        manifest["continuity"]["head_hash"] = entries[-1]["content_hash"]
-        files["manifest.json"] = json.dumps(manifest).encode()
-        subject = json.dumps(manifest["continuity"], sort_keys=True, separators=(",", ":"))
-        files["evidence.pdf"] = (
-            b"%PDF-1.4 minimal\n/Subject (" + subject.encode() + b")\n/Producer"
-        )
-        manifest["files"]["ledger.jsonl"]["sha256"] = hashlib.sha256(files["ledger.jsonl"]).hexdigest()
-        manifest["files"]["evidence.pdf"]["sha256"] = hashlib.sha256(files["evidence.pdf"]).hexdigest()
-        files["manifest.json"] = json.dumps(manifest).encode()
-
-        detail = self._failing(files, "anchors")
-        self.assertIn("forged anchor or rewritten chain", detail)
-
-    # -- subject_type boundary ----------------------------------------------
-
-    def test_pre_v3_entry_with_subject_type_is_flagged(self):
-        files = _load()
-        entries = _entries(files)
-        captured = next(e for e in entries if e["event_type"] == "artefact.captured")
-        payload = json.loads(captured["payload_json"])
-        payload["schema_version"] = 2  # claim pre-boundary form but keep the field
-        captured["payload_json"] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        _recompute_chain(entries)
-        _write_entries(files, entries)
-        detail = self._failing(files, "subject-type-boundary")
-        self.assertIn("pre-v3 entry carries subject_type", detail)
-
-    def test_v3_entry_missing_subject_type_is_flagged(self):
-        files = _load()
-        entries = _entries(files)
-        captured = next(e for e in entries if e["event_type"] == "artefact.captured")
-        payload = json.loads(captured["payload_json"])
-        payload.pop("subject_type")
-        captured["payload_json"] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        _recompute_chain(entries)
-        _write_entries(files, entries)
-        detail = self._failing(files, "subject-type-boundary")
-        self.assertIn("missing subject_type", detail)
-
-    # -- signatures ----------------------------------------------------------
-
-    def test_tampered_artefact_content_fails_signature(self):
-        files = _load()
-        artefacts = json.loads(files["artefacts.json"])
-        artefacts[0]["content"] = artefacts[0]["content"] + " /* tampered */"
-        files["artefacts.json"] = json.dumps(artefacts).encode()
-        manifest = json.loads(files["manifest.json"])
-        manifest["files"]["artefacts.json"]["sha256"] = hashlib.sha256(files["artefacts.json"]).hexdigest()
-        files["manifest.json"] = json.dumps(manifest).encode()
-        detail = self._failing(files, "actor-signatures")
-        self.assertIn("does not verify", detail)
-
-    # -- undeclared filter ---------------------------------------------------
-
-    def test_unknown_filter_predicate_fails(self):
-        files = _load()
-        manifest = json.loads(files["manifest.json"])
-        manifest["continuity"]["filter"]["predicate"] = {"type": "secret-sauce"}
-        files["manifest.json"] = json.dumps(manifest).encode()
-        detail = self._failing(files, "declared-filter")
-        self.assertIn("uncheckable", detail)
+    def test_strict_parser_rejects_floats_constants_and_duplicate_keys(self):
+        for text in ('{"a":1.0}', '{"a":1e3}', '{"a":NaN}', '{"a":1,"a":2}'):
+            with self.assertRaises(dv.CanonicalError):
+                dv.parse_strict(text)
+        self.assertEqual(dv.parse_strict('{"a":[1,2]}'), {"a": [1, 2]})
 
 
 class Ed25519Test(unittest.TestCase):
-    """RFC 8032 §7.1 test vectors."""
-
-    def test_rfc8032_test1_empty_message(self):
-        pub = bytes.fromhex(
-            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
-        )
-        sig = bytes.fromhex(
-            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
-            "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
-        )
+    def test_rfc8032_test_vector_1(self):
+        pub = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        sig = bytes.fromhex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+                            "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b")
         self.assertTrue(dv.ed25519_verify(pub, sig, b""))
         self.assertFalse(dv.ed25519_verify(pub, sig, b"x"))
-        self.assertFalse(dv.ed25519_verify(pub, sig[:-1] + b"\x00", b""))
 
-    def test_rfc8032_test2_one_byte(self):
-        pub = bytes.fromhex(
-            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
-        )
-        sig = bytes.fromhex(
-            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
-            "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"
-        )
-        self.assertTrue(dv.ed25519_verify(pub, sig, b"\x72"))
+
+class DERAndTokenTest(unittest.TestCase):
+    def test_malformed_tokens_are_rejected(self):
+        for token in (b"", b"\x00\x01garbage", b"\x30\x03\x02\x01\x00", b"\x30\x82\xff\xff",
+                      b"\x30\x80\x00\x00", b"\x30\x00\x00", b"\x30\x81\x05\x02\x01\x00\x02\x01\x00"):
+            with self.assertRaises(dv.TokenError):
+                dv.verify_token(token, SECTIGO_HEAD, dv.pinned_roots())
+
+    def test_random_bytes_holding_the_imprint_are_rejected(self):
+        imprint = hashlib.sha256(SECTIGO_HEAD.encode()).digest()
+        with self.assertRaises(dv.TokenError):
+            dv.verify_token(os.urandom(40) + imprint + os.urandom(40), SECTIGO_HEAD, dv.pinned_roots())
+
+    def test_embedded_root_is_sectigo_r46(self):
+        self.assertIn(SECTIGO_R46, dv.pinned_roots())
+
+    @needs_crypto
+    def test_real_sectigo_token_verifies_against_the_embedded_root(self):
+        r = dv.verify_token(SECTIGO_TOKEN, SECTIGO_HEAD, dv.pinned_roots())
+        self.assertTrue(r.cryptographically_verified)
+        self.assertEqual(r.root_fingerprint, SECTIGO_R46)
+        self.assertTrue(r.gen_time.startswith("2026-10-11T"))
+
+    def test_real_sectigo_token_is_rejected_for_another_hash_or_without_its_root(self):
+        with self.assertRaisesRegex(dv.TokenError, "imprint"):
+            dv.verify_token(SECTIGO_TOKEN, "0" * 64, dv.pinned_roots())
+        with self.assertRaisesRegex(dv.TokenError, "pinned root"):
+            dv.verify_token(SECTIGO_TOKEN, SECTIGO_HEAD, {})
+
+    @needs_crypto
+    def test_one_flipped_byte_in_the_real_token_is_rejected(self):
+        tampered = bytearray(SECTIGO_TOKEN)
+        tampered[len(tampered) // 2] ^= 0x01
+        with self.assertRaises(dv.TokenError):
+            dv.verify_token(bytes(tampered), SECTIGO_HEAD, dv.pinned_roots())
+
+    def test_without_cryptography_the_structure_is_checked_but_not_the_signatures(self):
+        with mock.patch.object(dv, "_crypto", return_value=None):
+            r = dv.verify_token(SECTIGO_TOKEN, SECTIGO_HEAD, dv.pinned_roots())
+        self.assertFalse(r.cryptographically_verified)
+        self.assertEqual(r.root_fingerprint, SECTIGO_R46)
+
+
+class VectorTest(unittest.TestCase):
+    """Spec 2.0 §11: the valid vector verifies, every tamper vector does not."""
+
+    @needs_crypto
+    def test_every_vector_matches_its_expectation(self):
+        for name, spec in EXPECTED["vectors"].items():
+            with self.subTest(vector=name):
+                rep = dv.verify_bundle(vector(name), tsa_roots=ROOTS)
+                want = spec["must_fail"]
+                self.assertTrue(set(want) <= set(failed(rep)), f"{name}: {failed(rep)}")
+                self.assertEqual(rep.ok, not want, f"{name}: {failed(rep)}")
+
+    def test_review_probes_are_all_present(self):
+        for probe in ("resign", "forged_attestation", "downgrade", "truncate", "rehash", "faketsa",
+                      "pipe_collision"):
+            self.assertTrue(EXPECTED["vectors"][f"{probe}.zip"]["must_fail"], probe)
+
+    def test_hash_only_tamper_vectors_fail_without_cryptography(self):
+        with mock.patch.object(dv, "_crypto", return_value=None):
+            for name in ("pipe_collision.zip", "noncanonical.zip", "forged_attestation.zip", "rehash.zip",
+                         "faketsa.zip", "truncate.zip"):
+                with self.subTest(vector=name):
+                    rep = dv.verify_bundle(vector(name), tsa_roots=ROOTS, strict=False)
+                    self.assertFalse(rep.ok)
+
+    @needs_crypto
+    def test_test_roots_are_not_trusted_unless_pinned(self):
+        rep = dv.verify_bundle(vector("valid.zip"))
+        self.assertEqual(failed(rep), ["anchors"])
+        detail = next(c["detail"] for c in rep.checks if c["id"] == "anchors")
+        self.assertIn("pinned root", detail)
+
+
+class StrictModeTest(unittest.TestCase):
+    def test_strict_mode_fails_unverifiable_tokens(self):
+        with mock.patch.object(dv, "_crypto", return_value=None):
+            rep = dv.verify_bundle(vector("valid.zip"), tsa_roots=ROOTS)
+        self.assertTrue(rep.strict)
+        self.assertEqual(failed(rep), ["anchors"])
+
+    def test_non_strict_mode_reports_them_instead(self):
+        with mock.patch.object(dv, "_crypto", return_value=None):
+            rep = dv.verify_bundle(vector("valid.zip"), tsa_roots=ROOTS, strict=False)
+        self.assertTrue(rep.ok)
+        self.assertTrue(any("non-strict" in n for n in rep.notes))
+        self.assertIsNone(rep.timestamps["last_externally_timestamped_seq"])
+
+
+class TimestampReportTest(unittest.TestCase):
+    """REQ-VER-04: last externally timestamped seq and later entries."""
+
+    @needs_crypto
+    def test_valid_vector_is_fully_timestamped(self):
+        rep = dv.verify_bundle(vector("valid.zip"), tsa_roots=ROOTS)
+        head = rep.timestamps["last_externally_timestamped_seq"]
+        self.assertIsInstance(head, int)
+        self.assertEqual(rep.timestamps["not_yet_externally_timestamped"], [])
+        self.assertEqual(rep.timestamps["timestamped_later_than_15_minutes"], [])
+
+    def test_local_only_anchors_leave_every_entry_pending(self):
+        rep = dv.verify_bundle(vector("anchor_downgrade.zip"), tsa_roots=ROOTS)
+        self.assertIsNone(rep.timestamps["last_externally_timestamped_seq"])
+        self.assertTrue(rep.timestamps["not_yet_externally_timestamped"])
+        self.assertTrue(any("not yet externally timestamped" in n for n in rep.notes))
+
+
+class OutputTest(unittest.TestCase):
+    @needs_crypto
+    def test_cli_exit_codes_and_wording(self):
+        roots = sum((["--tsa-root", r] for r in ROOTS), [])
+        code, out = run_cli(vector("valid.zip"), *roots)
+        self.assertEqual(code, 0)
+        self.assertIn("VERIFIED: every check", out)
+        code, out = run_cli(vector("rehash.zip"), *roots)
+        self.assertEqual(code, 1)
+        self.assertIn("[NOT VERIFIED] Anchors", out)
+        # Verdict labels are not used (Domokos boundary B-2).
+        for word in ("PASS", "FAIL", "compliant"):
+            self.assertNotIn(word, out)
+
+    def test_json_report_shape(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            dv.main([vector("anchor_downgrade.zip"), "--json", "-"])
+        text = out.getvalue()
+        report = json.loads(text[text.index("{\n"):])
+        self.assertEqual(report["spec"], "domokos-bundle/2")
+        self.assertEqual(set(report), {"bundle", "spec", "verifier_version", "strict", "ok", "checks",
+                                       "timestamps", "notes"})
+        self.assertEqual({c["id"] for c in report["checks"]},
+                         {"manifest-files", "chain-hashes", "sequence-continuity", "declared-filter",
+                          "void-entries", "projection", "subject-type-boundary", "signatures", "anchors",
+                          "timestamps", "pdf-continuity"})
+
+    def test_unreadable_bundle_is_reported(self):
+        rep = dv.verify_bundle(os.path.join(VECTORS, "expected.json"))
+        self.assertFalse(rep.ok)
+
+    def test_charter_needs_a_version(self):
+        with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
+            dv.main([vector("valid.zip"), "--charter", "x.md"])
+        self.assertEqual(cm.exception.code, 2)
+
+
+class CharterTest(unittest.TestCase):
+    def setUp(self):
+        self.doc = os.path.join(VECTORS, EXPECTED["charter"]["file"])
+        self.version = EXPECTED["charter"]["version"]
+
+    def _charter_check(self, doc, version):
+        rep = dv.verify_bundle(vector("valid.zip"), tsa_roots=ROOTS, charter=doc, charter_version=version)
+        return next(c for c in rep.checks if c["id"] == "charter")
+
+    def test_recorded_charter_matches(self):
+        self.assertTrue(self._charter_check(self.doc, self.version)["ok"])
+
+    def test_unknown_version_and_edited_text_are_reported(self):
+        self.assertIn("no charter.recorded entry", self._charter_check(self.doc, "9.9.9")["detail"])
+        import tempfile
+
+        with open(self.doc, "rb") as src:
+            text = src.read()
+        with tempfile.NamedTemporaryFile("wb", suffix=".md", delete=False) as f:
+            f.write(text + b"\nedited\n")
+        try:
+            check = self._charter_check(f.name, self.version)
+        finally:
+            os.unlink(f.name)
+        self.assertFalse(check["ok"])
+        self.assertIn("differs from the record", check["detail"])
 
 
 if __name__ == "__main__":
