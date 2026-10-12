@@ -23,7 +23,10 @@ pipx install domokos-verify
 domokos-verify bundle.zip
 ```
 
-or, from a checkout:
+Until the first release is on PyPI, install from this repository instead:
+`pipx install git+https://github.com/domokosautomotive/domokos-verify`.
+
+Or, from a checkout:
 
 ```bash
 pip install cryptography
@@ -112,22 +115,21 @@ Releases are built and published by `.github/workflows/release.yml` when a
 signed tag `v*` is pushed. Publishing uses PyPI trusted publishing (OpenID
 Connect) in the `pypi` environment; no API token exists anywhere.
 
-### Publication steps for the founder (REQ-VER-06)
+### Publication steps (REQ-VER-06)
 
-Nothing below has been done. Each step makes something public or changes an
-account, so only the founder runs them.
+The package version is 2.1.0 because it implements bundle spec 2.1.0 (and
+accepts 2.0.0 bundles).
 
-1. Create the public repository and push the release branch:
-
-   ```bash
-   gh repo create domokosautomotive/domokos-verify --public --source . --remote origin --push
-   ```
-
+1. Done on 2026-10-12: the public repository
+   <https://github.com/domokosautomotive/domokos-verify> was created and
+   `main` pushed.
 2. On PyPI, add a pending trusted publisher for project `domokos-verify`:
    owner `domokosautomotive`, repository `domokos-verify`, workflow
    `release.yml`, environment `pypi`. In the GitHub repository settings,
    create the environment `pypi`.
-3. Set up SSH tag signing once:
+3. Set up SSH tag signing once, add the same public key to your GitHub
+   account as a signing key (so the tag shows as verified), and commit it to
+   `.github/allowed_signers` (so the workflow checks it):
 
    ```bash
    git config gpg.format ssh
@@ -137,9 +139,9 @@ account, so only the founder runs them.
 4. Tag and push the release; the workflow builds, tests and publishes:
 
    ```bash
-   git tag -s v2.0.0 -m "domokos-verify 2.0.0"
-   git push origin v2.0.0
+   git tag -s v2.1.0 -m "domokos-verify 2.1.0"
+   git push origin v2.1.0
    ```
 
-5. Check the release: `pipx install domokos-verify` then
-   `domokos-verify --verifier-version` prints `domokos-verify 2.0.0`.
+5. Check the release: `pipx install domokos-verify==2.1.0` then
+   `domokos-verify --verifier-version` prints `domokos-verify 2.1.0`.

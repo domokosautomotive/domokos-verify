@@ -32,7 +32,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 SPEC = "domokos-bundle/2"
 SPEC_VERSION = "2.1.0"
 SPEC_VERSIONS = ("2.0.0", "2.1.0")  # 2.1 adds user signatures, disclosure bundles, confidential text
