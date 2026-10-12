@@ -87,6 +87,27 @@
         "gap-register"
       ],
       "what": "a gap register row marked assigned without a gap.assigned entry"
+    },
+    "user_signature_forged.zip": {
+      "must_fail": [
+        "signatures",
+        "anchors"
+      ],
+      "what": "a user-signed statement re-signed with a key the ledger never registered"
+    },
+    "user_statement_edit.zip": {
+      "must_fail": [
+        "signatures",
+        "anchors"
+      ],
+      "what": "a user-signed capture's title and statement edited, chain rehashed"
+    },
+    "platform_after_retirement.zip": {
+      "must_fail": [
+        "signatures",
+        "anchors"
+      ],
+      "what": "a user-signed capture re-signed with a retired platform key"
     }
   }
 }

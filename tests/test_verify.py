@@ -1,8 +1,8 @@
-"""Tests for domokos-verify (spec 2.0). Standard library unittest only.
+"""Tests for domokos-verify (spec 2.1). Standard library unittest only.
 
     python -m unittest discover -s tests
 
-The bundle vectors in fixtures/vectors/spec-2.0 are a copy of the vectors
+The bundle vectors in fixtures/vectors/spec-2.1 are a copy of the vectors
 the Domokos product generates (scripts/make_test_vectors.py). Tests that
 need pyca/cryptography skip when it is absent; the stdlib-only behaviour has
 its own tests.
@@ -25,7 +25,7 @@ sys.path.insert(0, ROOT)
 
 import domokos_verify as dv  # noqa: E402
 
-VECTORS = os.path.join(ROOT, "fixtures", "vectors", "spec-2.0")
+VECTORS = os.path.join(ROOT, "fixtures", "vectors", "spec-2.1")
 with open(os.path.join(VECTORS, "expected.json"), encoding="utf-8") as _f:
     EXPECTED = json.load(_f)
 ROOTS = [os.path.join(VECTORS, r) for r in EXPECTED["tsa_roots"]]
@@ -161,6 +161,59 @@ class VectorTest(unittest.TestCase):
         self.assertEqual(failed(rep), ["anchors"])
         detail = next(c["detail"] for c in rep.checks if c["id"] == "anchors")
         self.assertIn("pinned root", detail)
+
+
+class UserSignatureTest(unittest.TestCase):
+    """Spec 2.1 §5a: user signatures with client-held keys."""
+
+    def _signatures(self, name: str):
+        rep = dv.verify_bundle(vector(name), tsa_roots=ROOTS, strict=False)
+        return next(c for c in rep.checks if c["id"] == "signatures")
+
+    def test_valid_vector_verifies_its_user_signatures(self):
+        check = self._signatures("valid.zip")
+        self.assertTrue(check["ok"])
+        self.assertIn("2 user signature (client-held key)", check["detail"])
+
+    def test_each_user_signature_probe_fails_the_signature_check_for_its_reason(self):
+        for name, reason in (("user_signature_forged.zip", "does not verify"),
+                             ("user_statement_edit.zip", "does not verify"),
+                             ("platform_after_retirement.zip", "was retired at seq")):
+            with self.subTest(vector=name):
+                check = self._signatures(name)
+                self.assertFalse(check["ok"])
+                self.assertIn(reason, check["detail"])
+
+    def test_statement_rules(self):
+        entries = [
+            {"seq": 1, "event_type": "key.registered", "payload": {"key_id": "k1", "public_key": "00" * 32}},
+            {"seq": 2, "event_type": "key.retired", "payload": {"key_id": "k1", "kind": "user"}},
+            {"seq": 3, "event_type": "key.retired", "payload": {"identity": "eng-a", "kind": "platform"}},
+        ]
+        reg = dv._key_registry(entries)
+        self.assertEqual(reg["user"]["k1"]["retired"], 2)
+        self.assertEqual(reg["platform"], {"eng-a": 3})
+        attest = {"seq": 5, "event_type": "artefact.attested",
+                  "payload": {"artefact_id": "a", "attester_id": "att",
+                              "user_signature": {"algorithm": "ed25519", "key_id": "k1", "value": "00",
+                                                 "statement": {"type": "artefact.attest"}}}}
+        self.assertIn("retired at seq 2", dv._user_signature_status(attest, reg))
+        attest["payload"]["user_signature"]["key_id"] = "unknown"
+        self.assertIn("not registered", dv._user_signature_status(attest, reg))
+        attest["payload"]["user_signature"] = {"algorithm": "rsa"}
+        self.assertEqual(dv._user_signature_status(attest, reg), "malformed user_signature")
+
+    def test_spec_versions_2_0_and_2_1_are_accepted_and_others_refused(self):
+        import zipfile
+
+        with zipfile.ZipFile(vector("valid.zip")) as zf:
+            b = dv.Bundle(zf)
+            for version, ok in (("2.0.0", True), ("2.1.0", True), ("2.2.0", False)):
+                with self.subTest(version=version):
+                    b.manifest["spec_version"] = version
+                    rep = dv.Report("valid.zip", True)
+                    dv.check_manifest(b, rep)
+                    self.assertEqual(rep.checks[-1]["ok"], ok)
 
 
 class StrictModeTest(unittest.TestCase):

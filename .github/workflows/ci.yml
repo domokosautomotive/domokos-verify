@@ -53,6 +53,6 @@ jobs:
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install dist/*.whl
           cd /tmp
-          /tmp/clean/bin/domokos-verify "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/valid.zip" \
-            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/roots/vector-tsa-ec-root.pem" \
-            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.0/roots/vector-tsa-rsa-root.pem"
+          /tmp/clean/bin/domokos-verify "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.1/valid.zip" \
+            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.1/roots/vector-tsa-ec-root.pem" \
+            --tsa-root "$GITHUB_WORKSPACE/fixtures/vectors/spec-2.1/roots/vector-tsa-rsa-root.pem"

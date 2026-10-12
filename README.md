@@ -92,7 +92,7 @@ pip install cryptography
 python -m unittest discover -s tests
 ```
 
-`fixtures/vectors/spec-2.0` is a copy of the test vectors the Domokos product
+`fixtures/vectors/spec-2.1` is a copy of the test vectors the Domokos product
 generates: one valid bundle and one bundle per operator-tamper probe, with
 the test timestamp-authority roots and `expected.json`. The suite also checks
 a real token from Sectigo's public RFC 3161 service

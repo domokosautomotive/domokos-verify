@@ -2,7 +2,7 @@
 """
 domokos-verify — independent verifier for Domokos evidence bundles.
 
-Implements SPEC.md (format "domokos-bundle/2", spec 2.0.0) and nothing else:
+Implements SPEC.md (format "domokos-bundle/2", spec 2.1.0; 2.0.0 bundles verify too) and nothing else:
 no Domokos code and no shared library. The core is Python 3.9+ standard
 library only, in one file. Verifying the signatures and certificate chains
 of RFC 3161 timestamp tokens uses pyca/cryptography, the single documented
@@ -34,7 +34,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 __version__ = "2.0.0"
 SPEC = "domokos-bundle/2"
-SPEC_VERSION = "2.0.0"
+SPEC_VERSION = "2.1.0"
+SPEC_VERSIONS = ("2.0.0", "2.1.0")  # 2.1 adds user signatures, disclosure bundles, confidential text
 HASH_SCHEME = 2
 PROJECTION_VERSION = 2
 LIFECYCLE_DEFAULTS: Dict[str, Any] = {
@@ -750,7 +751,9 @@ def apply(records: Dict[str, Dict[str, Any]], e: Dict[str, Any], text_for: Calla
         review = copy.deepcopy(p["review"])
         review["recorded_at"] = at
         review["independence"] = copy.deepcopy(p["independence"])
-        review["signature"] = copy.deepcopy(p["signature"])
+        review["signature"] = copy.deepcopy(p.get("signature"))
+        if "user_signature" in p:  # spec 2.1: user signatures
+            review["user_signature"] = copy.deepcopy(p["user_signature"])
         rec["review"] = review
         rec["audit_state"] = p["audit_state"]
     elif t == "artefact.misra_scanned":
@@ -840,10 +843,12 @@ class Bundle:
 
 def check_manifest(b: Bundle, rep: Report) -> None:
     m, problems = b.manifest, []
-    for key, want in (("bundle_format", SPEC), ("spec_version", SPEC_VERSION), ("hash_scheme", HASH_SCHEME),
+    for key, want in (("bundle_format", SPEC), ("hash_scheme", HASH_SCHEME),
                       ("projection_version", PROJECTION_VERSION)):
         if m.get(key) != want:
             problems.append(f"{key} is {m.get(key)!r}, expected {want!r}")
+    if m.get("spec_version") not in SPEC_VERSIONS:
+        problems.append(f"spec_version is {m.get('spec_version')!r}, expected one of {SPEC_VERSIONS}")
     for name, meta in m.get("files", {}).items():
         try:
             data = b.zf.read(name)
@@ -1019,15 +1024,88 @@ def _ed25519(keys: Dict[str, str], identity: Optional[str], value: Any, sig: Any
     return "ok" if ok else f"signature by {identity!r} does not verify"
 
 
+USER_SIGNATURE_KIND = "user signature (client-held key)"
+
+
+def _key_registry(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """SPEC §5a: user keys from key.registered / key.retired entries, and
+    the seq at which each platform identity's key was retired."""
+    users: Dict[str, Dict[str, Any]] = {}
+    platform: Dict[str, int] = {}
+    for e in entries:
+        p = e["payload"]
+        if not isinstance(p, dict):
+            continue
+        if e["event_type"] == "key.registered" and isinstance(p.get("key_id"), str):
+            users[p["key_id"]] = {"public_key": p.get("public_key"), "registered": e["seq"], "retired": None}
+        elif e["event_type"] == "key.retired":
+            if p.get("kind") == "platform" and isinstance(p.get("identity"), str):
+                platform.setdefault(p["identity"], e["seq"])
+            elif p.get("key_id") in users and users[p["key_id"]]["retired"] is None:
+                users[p["key_id"]]["retired"] = e["seq"]
+    return {"user": users, "platform": platform}
+
+
+def _statement_expectation(event_type: str, p: Dict[str, Any]) -> Dict[str, Any]:
+    """SPEC §5a: what the signed statement must say about its entry."""
+    if event_type == "artefact.captured":
+        a = p.get("artefact", {})
+        prov = a.get("provenance", {})
+        model = prov.get("model")
+        return {"type": "artefact.capture", "identity": a.get("actor", {}).get("identity"),
+                "engineer_id": prov.get("engineer_id"), "kind": a.get("kind"), "title": a.get("title"),
+                "content_sha256": a.get("content_sha256"), "prompt_sha256": prov.get("prompt_sha256"),
+                "raw_response_sha256": prov.get("raw_response_sha256"),
+                "model": ({"vendor": model.get("vendor"), "name": model.get("name"), "version": model.get("version")}
+                          if isinstance(model, dict) else None),
+                "requirement_ids": sorted({r.get("requirement_id") for r in a.get("requirement_links", [])})}
+    if event_type == "artefact.reviewed":
+        r = p.get("review", {})
+        return {"type": "artefact.review", "artefact_id": p.get("artefact_id"), "reviewer_id": r.get("reviewer_id"),
+                "decision": r.get("decision"), "rationale": r.get("rationale"), "diff": r.get("diff"),
+                "independence_waiver": r.get("independence_waiver")}
+    return {"type": "artefact.attest", "artefact_id": p.get("artefact_id"), "attester_id": p.get("attester_id")}
+
+
+def _user_signature_status(e: Dict[str, Any], reg: Dict[str, Any]) -> str:
+    sig = e["payload"].get("user_signature")
+    if not isinstance(sig, dict) or not isinstance(sig.get("statement"), dict) or sig.get("algorithm") != "ed25519":
+        return "malformed user_signature"
+    key = reg["user"].get(sig.get("key_id"))
+    if key is None or key["registered"] >= e["seq"]:
+        return f"key {sig.get('key_id')!r} is not registered before this entry"
+    if key["retired"] is not None and key["retired"] < e["seq"]:
+        return f"key {sig.get('key_id')!r} was retired at seq {key['retired']}"
+    statement = sig["statement"]
+    expected = _statement_expectation(e["event_type"], e["payload"])
+    if set(statement) != set(expected) | {"signed_at", "nonce"} or any(statement.get(k) != v for k, v in expected.items()):
+        return "the signed statement does not match the entry"
+    try:
+        ok = ed25519_verify(bytes.fromhex(key["public_key"] or ""), bytes.fromhex(str(sig.get("value", ""))),
+                            canonical_bytes(statement))
+    except (ValueError, CanonicalError):
+        ok = False
+    return "ok" if ok else "the user signature does not verify"
+
+
 def check_signatures(b: Bundle, rep: Report) -> None:
-    problems, verified, legacy = [], 0, 0
+    problems, verified, legacy, user_ok = [], 0, 0, 0
     migrated: set = set()
+    reg = _key_registry(b.entries)
     for e in b.entries:
         p = e["payload"]
         if not isinstance(p, dict):
             continue
         if e["event_type"] == "schema.migrated":
             migrated.update(p.get("artefact_ids", []))
+            continue
+        if e["event_type"] in ("artefact.captured", "artefact.reviewed", "artefact.attested") \
+                and "user_signature" in p:
+            status = _user_signature_status(e, reg)
+            if status == "ok":
+                user_ok += 1
+            else:
+                problems.append(f"seq {e['seq']} ({e['event_type']}): {status}")
             continue
         if e["event_type"] == "artefact.captured":
             a = p.get("artefact", {})
@@ -1041,22 +1119,30 @@ def check_signatures(b: Bundle, rep: Report) -> None:
                 continue
             value = copy.deepcopy(a)
             value.get("actor", {}).pop("signature", None)
-            status = _ed25519(b.keys, actor.get("identity"), value, sig)
+            identity = actor.get("identity")
+            status = _ed25519(b.keys, identity, value, sig)
         elif e["event_type"] in ("artefact.reviewed", "artefact.attested"):
             block = p.get("signature")
             if not isinstance(block, dict) or block.get("algorithm", "ed25519") != "ed25519":
                 problems.append(f"seq {e['seq']}: {e['event_type']} carries no ed25519 signature block")
                 continue
             value = {k: v for k, v in p.items() if k != "signature"}
-            status = _ed25519(b.keys, block.get("identity"), value, block.get("value"))
+            identity = block.get("identity")
+            status = _ed25519(b.keys, identity, value, block.get("value"))
         else:
             continue
+        retired = reg["platform"].get(identity or "")
+        if status == "ok" and retired is not None and retired < e["seq"]:
+            status = f"platform key of {identity!r} was retired at seq {retired}"
         if status == "ok":
             verified += 1
         else:
             problems.append(f"seq {e['seq']} ({e['event_type']}): {status}")
     detail = (f"{verified} verified, {legacy} legacy-unsigned in a recorded migration. Signatures are {SIGNATURE_KIND}: "
               "they show the platform bound the payload to an identity string, not who authored or approved it")
+    if user_ok:
+        detail += (f"; {user_ok} {USER_SIGNATURE_KIND}: each verifies a statement signed with a key the ledger "
+                   "registered to a person before the entry")
     if problems:
         detail = "; ".join(problems) + f" [{detail}]"
     rep.check("signatures", f"Signatures — {SIGNATURE_KIND}", not problems, detail)

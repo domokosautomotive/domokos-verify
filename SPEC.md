@@ -1,9 +1,15 @@
 # Domokos evidence bundle specification
 
 **Format id:** `domokos-bundle/2`
-**Spec version:** 2.0.0 (2026-10-11)
+**Spec version:** 2.1.0 (2026-10-12)
 **Supersedes:** `domokos-bundle/1` (spec 1.1.0). Version 2 ledgers start a new
 genesis; version 1 bundles are not verified by this specification.
+
+**Changes in 2.1.0.** All additive; a valid 2.0.0 bundle is a valid 2.1.0
+bundle, and a verifier for 2.1.0 MUST accept `spec_version` "2.0.0".
+
+- §5a user signatures (client-held keys) and key lifecycle entries.
+- §4: a review record carries `user_signature` when its entry does.
 
 This document is the published interface between the Domokos platform and any
 independent verifier. A verifier implements THIS document, not Domokos
@@ -27,7 +33,8 @@ All JSON is UTF-8. All hashes are lowercase hex SHA-256 unless stated.
 ## 0. Manifest
 
 `manifest.json` MUST carry `"bundle_format": "domokos-bundle/2"`,
-`"spec_version": "2.0.0"`, `"hash_scheme": 2` and `"projection_version": 2`.
+`"spec_version"` "2.0.0" or "2.1.0", `"hash_scheme": 2` and
+`"projection_version": 2`.
 `files` maps every other file name to `{"sha256", "bytes"}`; every listed
 file MUST be present and match. `scope` is
 `{"kind": "requirement", "requirement_id": R}`.
@@ -138,7 +145,7 @@ error.
 | `artefact.flagged` | `{"artefact_id", "finding": {"code", "detail", "blocking"}}` | appends `{"code", "detail", "blocking", "raised_at": at, "resolved_at": null, "waiver": null}` to `flags` |
 | `artefact.finding_resolved` | `{"artefact_id", "code", "reason"}` | sets `resolved_at` = `at` on every flag with that code and `resolved_at` null |
 | `finding.waived` | `{"artefact_id", "code", "waived_by", "waived_by_person_id", "rationale"}` | on every flag with that code, `resolved_at` null and `waiver` null: `waiver` = `{"waived_by", "waived_by_person_id", "rationale", "recorded_at": at}` |
-| `artefact.reviewed` | `{"artefact_id", "review", "independence", "audit_state", "signature"}` | `review` = payload `review` plus `"recorded_at": at`, `"independence"`, `"signature"`; `audit_state` = payload `audit_state` |
+| `artefact.reviewed` | `{"artefact_id", "review", "independence", "audit_state", "signature" or "user_signature"}` | `review` = payload `review` plus `"recorded_at": at`, `"independence"`, `"signature"` (payload `signature`, or null when absent) and, only when the payload has one, `"user_signature"` (§5a); `audit_state` = payload `audit_state` |
 | `artefact.misra_scanned` | `{"artefact_id", "findings"}` | `misra_findings` = `findings` |
 | `artefact.attested` | `{"artefact_id", "attester_id", ..., "signature"}` | `audit_state` = `"attested"`; `attestation` = the payload without `artefact_id`, plus `"recorded_at": at` |
 | `link.added` | `{"artefact_id", "link_id", "link_type", "target_artefact_id", "target_requirement_id", "added_by", "added_by_person_id"}` | appends the payload without `artefact_id`, plus `"recorded_at": at`, to `trace_links` |
@@ -185,6 +192,47 @@ A missing key, a malformed value or a failed verification is a failure. The
 marker `"LEGACY-UNSIGNED"` in place of an artefact signature is allowed only
 for an artefact id listed in the `artefact_ids` of an earlier
 `schema.migrated` entry; anywhere else it is a failure.
+
+## 5a. User signatures (client-held keys) — 2.1
+
+When a user holds their own key, the platform does not sign. The ledger
+entry instead carries `payload.user_signature`:
+
+    {"kind": "user signature (client-held key)", "algorithm": "ed25519",
+     "key_id": K, "statement": S, "value": hex}
+
+**Keys.** A `key.registered` entry `{key_id, user_id, person_id, algorithm,
+public_key}` makes key K valid for entries with a greater seq. A
+`key.retired` entry with `kind` "user" and `key_id` K ends that validity for
+entries with a greater seq. A `key.retired` entry with `kind` "platform"
+and `identity` I retires I's platform key: a platform signature (§5) by I
+on an entry with a greater seq is a failure.
+
+**Statements.** `S` is an object whose members are exactly those listed
+below plus `signed_at` (a timestamp string) and `nonce` (a string). For
+the entry it signs, each listed member MUST equal the value shown:
+
+- `artefact.captured` (A = `payload.artefact`): `type` "artefact.capture",
+  `identity` A.actor.identity, `engineer_id` A.provenance.engineer_id,
+  `kind` A.kind, `title` A.title, `content_sha256` A.content_sha256,
+  `prompt_sha256` A.provenance.prompt_sha256, `raw_response_sha256`
+  A.provenance.raw_response_sha256, `model` `{vendor, name, version}` of
+  A.provenance.model (or null), `requirement_ids` the sorted distinct
+  `requirement_id`s of A.requirement_links.
+- `artefact.reviewed`: `type` "artefact.review", `artefact_id`,
+  `reviewer_id`, `decision`, `rationale`, `diff`, `independence_waiver`
+  (from `payload.review`; `artefact_id` from the payload).
+- `artefact.attested`: `type` "artefact.attest", `artefact_id`,
+  `attester_id`.
+
+**Check.** K MUST be valid for the entry, and `value` MUST be K's Ed25519
+signature over `canonical(S)`. A captured artefact with a user signature
+has `A.actor.signature` null; a reviewed or attested entry with one has no
+`payload.signature`.
+
+A user signature shows that the holder of a key the ledger registered to a
+person signed that statement. Whether the key holder is that person rests
+on the key registration, which the ledger records.
 
 ## 6. Anchors and timestamp tokens
 
