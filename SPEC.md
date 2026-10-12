@@ -10,6 +10,9 @@ bundle, and a verifier for 2.1.0 MUST accept `spec_version` "2.0.0".
 
 - §5a user signatures (client-held keys) and key lifecycle entries.
 - §4: a review record carries `user_signature` when its entry does.
+- §6a Merkle anchors: an anchor may carry `merkle_root`; its tokens then
+  sign the anchor digest instead of the head hash.
+- §13 selective-disclosure bundles.
 
 This document is the published interface between the Domokos platform and any
 independent verifier. A verifier implements THIS document, not Domokos
@@ -280,6 +283,28 @@ the run. A verifier MAY offer a non-strict mode that reports such anchors as
 unverified without failing. A token that is shown to be wrong fails in every
 mode.
 
+## 6a. Merkle anchors — 2.1
+
+An anchor MAY carry `merkle_root` (hex). It is the RFC 6962 Merkle tree
+hash over the entry hashes (`content_hash`) of seq 1..`ledger_seq`, in seq
+order:
+
+- leaf = SHA-256(0x00 || bytes of the entry hash);
+- node = SHA-256(0x01 || left || right);
+- a tree of n ≥ 2 leaves splits at the largest power of two k < n into the
+  first k leaves and the rest; one leaf is its own root; the empty tree is
+  SHA-256 of nothing.
+
+The verifier MUST recompute the root from the recomputed entry hashes and
+compare it. For such an anchor every token's message imprint is over the
+**anchor digest** instead of the head hash:
+
+    anchor_digest = lowercase hex SHA-256 of canonical({"ledger_hash": H, "ledger_seq": N, "merkle_root": R})
+
+and the imprint is SHA-256 of the UTF-8 bytes of that hex string, exactly
+as §6 states for a head hash. An anchor without `merkle_root` follows §6
+unchanged.
+
 ## 7. Timestamp summary
 
 `manifest.timestamps`:
@@ -342,6 +367,40 @@ A verifier MUST check, when a register is present:
 
 The verifier checks the rows against the ledger; it does not recompute the
 register.
+
+## 13. Selective-disclosure bundles — 2.1
+
+A disclosure bundle reveals chosen ledger entries without the rest. Its
+`manifest.json` carries `"bundle_format": "domokos-bundle/2"`,
+`"spec_version": "2.1.0"`, `"hash_scheme": 2`, `"kind": "disclosure"` and
+
+    "disclosure": {"seqs": [...], "anchor_id": A, "tree_size": N, "merkle_root": R, "reason": text}
+
+and lists in `files`, with SHA-256, exactly:
+
+| File | Content |
+|---|---|
+| `entries.jsonl` | the disclosed ledger entries, one per line, stored bytes verbatim (§2 fields) |
+| `proofs.json` | `{seq: {"leaf_index": seq − 1, "tree_size": N, "path": [hex, ...]}}` |
+| `anchors.json` | a list holding the one anchor A, with `merkle_root` R, `ledger_seq` N and its tokens |
+
+A verifier MUST check:
+
+1. **manifest-files**: the members above and their hashes.
+2. **entry-hashes**: each entry's payload is canonical and its
+   `content_hash` recomputes (§2, with the entry's own `prev_hash`); the
+   entries are exactly `disclosure.seqs`.
+3. **inclusion-proofs**: for each entry, the RFC 9162 §2.1.3.2 inclusion
+   proof from leaf(content_hash) at `leaf_index` in a tree of `tree_size`
+   leads to R; R, N and A equal the anchor's. If seq N is disclosed, its
+   `content_hash` equals the anchor's `ledger_hash`.
+4. **anchors**: A is `rfc3161` (a local anchor fails), and its tokens verify
+   over the anchor digest (§6a) with the §6 rules, from two different TSA
+   certificates.
+
+A disclosure bundle shows that the disclosed entries were in the ledger at
+the anchored position when the authorities timestamped the root. It says
+nothing about entries it does not carry.
 
 ## 10. Charter mode
 

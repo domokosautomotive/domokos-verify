@@ -108,6 +108,22 @@
         "anchors"
       ],
       "what": "a user-signed capture re-signed with a retired platform key"
+    },
+    "disclosure.zip": {
+      "must_fail": [],
+      "what": "two entries disclosed with inclusion proofs against the anchored root"
+    },
+    "disclosure_entry_edit.zip": {
+      "must_fail": [
+        "inclusion-proofs"
+      ],
+      "what": "a disclosed entry edited and its own hash recomputed"
+    },
+    "disclosure_root_swap.zip": {
+      "must_fail": [
+        "anchors"
+      ],
+      "what": "proofs rebuilt over a smaller tree and the anchor's root replaced"
     }
   }
 }

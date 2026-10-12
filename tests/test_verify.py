@@ -216,6 +216,42 @@ class UserSignatureTest(unittest.TestCase):
                     self.assertEqual(rep.checks[-1]["ok"], ok)
 
 
+class DisclosureTest(unittest.TestCase):
+    """Spec 2.1 §6a and §13: Merkle anchors and selective disclosure."""
+
+    def test_merkle_proofs_for_every_leaf_of_many_tree_sizes(self):
+        for size in list(range(1, 20)) + [64, 65]:
+            leaves = [dv.merkle_leaf(hashlib.sha256(str(i).encode()).hexdigest()) for i in range(size)]
+            root = dv.merkle_root(leaves)
+
+            def path(ls, i):
+                if len(ls) <= 1:
+                    return []
+                k = 1
+                while k * 2 < len(ls):
+                    k *= 2
+                return path(ls[:k], i) + [dv.merkle_root(ls[k:])] if i < k else path(ls[k:], i - k) + [dv.merkle_root(ls[:k])]
+
+            for i in range(size):
+                with self.subTest(size=size, leaf=i):
+                    self.assertTrue(dv.merkle_verify(leaves[i], i, size, path(leaves, i), root))
+                    other = dv.merkle_leaf("ff" * 32)
+                    self.assertFalse(dv.merkle_verify(other, i, size, path(leaves, i), root))
+                    self.assertFalse(dv.merkle_verify(leaves[i], size, size, path(leaves, i), root))
+
+    def test_disclosure_vector_reports_only_its_entries(self):
+        rep = dv.verify_bundle(vector("disclosure.zip"), tsa_roots=ROOTS, strict=False)
+        self.assertTrue(rep.ok, failed(rep))
+        self.assertEqual([c["id"] for c in rep.checks], ["manifest-files", "entry-hashes", "inclusion-proofs", "anchors"])
+        self.assertEqual(len(rep.timestamps["disclosed_seqs"]), 2)
+        self.assertTrue(any("not in this bundle" in n for n in rep.notes))
+
+    def test_full_bundle_anchor_with_a_merkle_root_is_checked(self):
+        rep = dv.verify_bundle(vector("valid.zip"), tsa_roots=ROOTS, strict=False)
+        anchors = next(c for c in rep.checks if c["id"] == "anchors")
+        self.assertTrue(anchors["ok"], anchors["detail"])
+
+
 class StrictModeTest(unittest.TestCase):
     def test_strict_mode_fails_unverifiable_tokens(self):
         with mock.patch.object(dv, "_crypto", return_value=None):

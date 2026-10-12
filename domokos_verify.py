@@ -1148,6 +1148,53 @@ def check_signatures(b: Bundle, rep: Report) -> None:
     rep.check("signatures", f"Signatures — {SIGNATURE_KIND}", not problems, detail)
 
 
+# ===========================================================================
+# Merkle trees (SPEC §6a, 2.1): RFC 6962 hashing, RFC 9162 inclusion proofs
+# ===========================================================================
+
+
+def merkle_leaf(entry_hash_hex: str) -> bytes:
+    return hashlib.sha256(b"\x00" + bytes.fromhex(entry_hash_hex)).digest()
+
+
+def merkle_node(left: bytes, right: bytes) -> bytes:
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+
+def merkle_root(leaves: List[bytes]) -> bytes:
+    if not leaves:
+        return hashlib.sha256(b"").digest()
+    if len(leaves) == 1:
+        return leaves[0]
+    k = 1
+    while k * 2 < len(leaves):
+        k *= 2
+    return merkle_node(merkle_root(leaves[:k]), merkle_root(leaves[k:]))
+
+
+def merkle_verify(leaf: bytes, index: int, size: int, path: List[bytes], root: bytes) -> bool:
+    if not 0 <= index < size:
+        return False
+    fn, sn, r = index, size - 1, leaf
+    for p in path:
+        if sn == 0:
+            return False
+        if fn & 1 or fn == sn:
+            r = merkle_node(p, r)
+            while not fn & 1 and fn != 0:
+                fn >>= 1
+                sn >>= 1
+        else:
+            r = merkle_node(r, p)
+        fn >>= 1
+        sn >>= 1
+    return sn == 0 and r == root
+
+
+def anchor_digest(ledger_hash: str, ledger_seq: int, root_hex: str) -> str:
+    return sha256_hex(canonical_bytes({"ledger_hash": ledger_hash, "ledger_seq": ledger_seq, "merkle_root": root_hex}))
+
+
 def check_anchors(b: Bundle, roots: Dict[str, Cert], rep: Report) -> List[Dict[str, Any]]:
     problems: List[str] = []
     unverified: List[str] = []
@@ -1165,6 +1212,14 @@ def check_anchors(b: Bundle, roots: Dict[str, Cert], rep: Report) -> List[Dict[s
         if b.running.get(seq) != a.get("ledger_hash"):
             problems.append(f"anchor {aid}: the chain at seq {seq} no longer matches the anchored hash")
             continue
+        signed = a["ledger_hash"]
+        if a.get("merkle_root") is not None:
+            # SPEC §6a: recompute the root over entry hashes 1..seq.
+            hashes = [b.running.get(s) for s in range(1, seq + 1)]
+            if None in hashes or merkle_root([merkle_leaf(h) for h in hashes]).hex() != a["merkle_root"]:
+                problems.append(f"anchor {aid}: the Merkle root over seq 1..{seq} no longer matches the anchor")
+                continue
+            signed = anchor_digest(a["ledger_hash"], seq, a["merkle_root"])
         if a.get("method") == "local":
             local += 1
             result["ok"] = True
@@ -1177,7 +1232,7 @@ def check_anchors(b: Bundle, roots: Dict[str, Cert], rep: Report) -> List[Dict[s
         for t in tokens:
             name = t.get("tsa_name", "?")
             try:
-                r = verify_token(bytes.fromhex(t.get("token", "")), a["ledger_hash"], roots)
+                r = verify_token(bytes.fromhex(t.get("token", "")), signed, roots)
             except (TokenError, ValueError) as exc:
                 problems.append(f"anchor {aid}: token from {name} does not verify: {exc}")
                 token_ok = False
@@ -1389,11 +1444,120 @@ def pinned_roots(extra_paths: Optional[List[str]] = None) -> Dict[str, Cert]:
     return roots
 
 
+def verify_disclosure(zf: zipfile.ZipFile, roots: Dict[str, Cert], rep: Report) -> None:
+    """SPEC §13 (2.1): a selective-disclosure bundle. The disclosed entries
+    are checked against their own hashes, each hash against the anchor's
+    Merkle root with its inclusion proof, and the root against the anchor's
+    timestamp tokens. Nothing is said about entries that are not disclosed."""
+    m = json.loads(zf.read("manifest.json"))
+    d = m.get("disclosure") or {}
+    problems: List[str] = []
+    for key, want in (("bundle_format", SPEC), ("spec_version", "2.1.0"), ("hash_scheme", HASH_SCHEME),
+                      ("kind", "disclosure")):
+        if m.get(key) != want:
+            problems.append(f"{key} is {m.get(key)!r}, expected {want!r}")
+    for name in ("entries.jsonl", "proofs.json", "anchors.json"):
+        meta = m.get("files", {}).get(name)
+        try:
+            data = zf.read(name)
+        except KeyError:
+            problems.append(f"{name}: missing from archive")
+            continue
+        if meta is None or sha256_hex(data) != meta.get("sha256"):
+            problems.append(f"{name}: not listed in the manifest or sha256 differs")
+    rep.check("manifest-files", "Manifest and file integrity", not problems, "; ".join(problems))
+    if problems:
+        return
+
+    # Disclosed entries: each recomputes to its content_hash.
+    problems = []
+    entries: Dict[int, Dict[str, Any]] = {}
+    for line in zf.read("entries.jsonl").decode("utf-8").splitlines():
+        if not line:
+            continue
+        e = json.loads(line)
+        seq = e.get("seq")
+        if set(e) != LEDGER_FIELDS:
+            problems.append(f"seq {seq}: entry fields differ from the spec")
+            continue
+        try:
+            payload = parse_strict(e["payload_json"])
+        except (ValueError, CanonicalError) as exc:
+            problems.append(f"seq {seq}: payload has no canonical form ({exc})")
+            continue
+        if canonical(payload) != e["payload_json"]:
+            problems.append(f"seq {seq}: stored payload is not in canonical form")
+        elif entry_hash(e, payload) != e["content_hash"]:
+            problems.append(f"seq {seq}: content_hash does not match the recomputed hash")
+        entries[seq] = e
+    if sorted(entries) != sorted(d.get("seqs") or []):
+        problems.append(f"disclosed entries {sorted(entries)} differ from the manifest's seqs {d.get('seqs')}")
+    rep.check("entry-hashes", "Disclosed entries recompute to their hashes", not problems, "; ".join(problems))
+
+    # Inclusion proofs against the Merkle root.
+    problems = []
+    anchors = json.loads(zf.read("anchors.json"))
+    anchor = anchors[0] if len(anchors) == 1 and isinstance(anchors[0], dict) else {}
+    size, root_hex = d.get("tree_size"), d.get("merkle_root")
+    if anchor.get("merkle_root") != root_hex or anchor.get("ledger_seq") != size or anchor.get("id") != d.get("anchor_id"):
+        problems.append("the manifest's anchor, tree size or Merkle root differ from anchors.json")
+    proofs = json.loads(zf.read("proofs.json"))
+    try:
+        root = bytes.fromhex(root_hex or "")
+    except ValueError:
+        root = b""
+    for seq, e in sorted(entries.items()):
+        p = proofs.get(str(seq)) or {}
+        try:
+            path = [bytes.fromhex(h) for h in p.get("path", [])]
+            ok = (p.get("leaf_index") == seq - 1 and p.get("tree_size") == size
+                  and merkle_verify(merkle_leaf(e["content_hash"]), seq - 1, size, path, root))
+        except (ValueError, TypeError):
+            ok = False
+        if not ok:
+            problems.append(f"seq {seq}: the inclusion proof does not lead to the Merkle root")
+    if isinstance(size, int) and size in entries and entries[size]["content_hash"] != anchor.get("ledger_hash"):
+        problems.append(f"seq {size}: the disclosed head differs from the anchored hash")
+    rep.check("inclusion-proofs", "Merkle inclusion proofs (RFC 9162) against the anchored root", not problems,
+              "; ".join(problems))
+
+    # The anchor: its tokens sign the digest of head hash, seq and root.
+    problems = []
+    tokens = anchor.get("tokens") or []
+    signers, gen_times = set(), []
+    if anchor.get("method") != "rfc3161":
+        problems.append(f"anchor method is {anchor.get('method')!r}: a disclosure needs an external anchor")
+    else:
+        signed = anchor_digest(anchor.get("ledger_hash", ""), size if isinstance(size, int) else -1, root_hex or "")
+        for t in tokens:
+            try:
+                r = verify_token(bytes.fromhex(t.get("token", "")), signed, roots)
+            except (TokenError, ValueError) as exc:
+                problems.append(f"token from {t.get('tsa_name', '?')} does not verify: {exc}")
+                continue
+            if str(r.nonce) != str(t.get("nonce")) or r.gen_time != t.get("gen_time"):
+                problems.append(f"token from {t.get('tsa_name', '?')}: nonce or genTime differs from the stored one")
+            if not r.cryptographically_verified and rep.strict:
+                problems.append(f"token from {t.get('tsa_name', '?')}: signature not checked (pyca/cryptography missing)")
+            signers.add(r.signer_fingerprint)
+            gen_times.append(r.gen_time)
+        if len(tokens) < 2 or len(signers) < 2:
+            problems.append("external anchors need tokens from two different TSA certificates")
+    rep.check("anchors", "Anchor and RFC 3161 timestamp tokens over the Merkle root (pinned roots)", not problems,
+              "; ".join(problems))
+    rep.timestamps = {"disclosed_seqs": sorted(entries), "tree_size": size, "anchor_gen_times": sorted(gen_times)}
+    rep.notes.append(f"selective disclosure: {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} of a ledger of "
+                     f"{size} entries; the other entries are not in this bundle and are not checked")
+
+
 def verify_bundle(path: str, tsa_roots: Optional[List[str]] = None, strict: bool = True,
                   charter: Optional[str] = None, charter_version: Optional[str] = None) -> Report:
     rep = Report(path, strict)
     try:
         with zipfile.ZipFile(path) as zf:
+            if json.loads(zf.read("manifest.json")).get("kind") == "disclosure":
+                verify_disclosure(zf, pinned_roots(tsa_roots), rep)
+                return rep
             b = Bundle(zf)
             _run_checks(b, rep, tsa_roots, charter, charter_version)
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as exc:
