@@ -1259,6 +1259,10 @@ def check_anchors(b: Bundle, roots: Dict[str, Cert], rep: Report) -> List[Dict[s
             result["ok"] = crypto_ok
             external += 1 if crypto_ok else 0
     detail = f"{external} external (RFC 3161, two authorities each), {local} local (advisory, no external force)"
+    qualified = sum(1 for a in b.anchors for t in (a.get("tokens") or []) if t.get("qualified"))
+    if qualified:
+        detail += (f"; {qualified} token(s) from an authority the operator declared eIDAS-qualified "
+                   "(qualified status is not checked against the EU trusted list)")
     if unverified and not rep.strict:
         detail += f"; unverified in non-strict mode: {', '.join(unverified)}"
         rep.notes.append("non-strict mode: some timestamp tokens were not cryptographically verified")

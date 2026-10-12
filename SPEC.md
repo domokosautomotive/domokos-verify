@@ -284,6 +284,12 @@ the run. A verifier MAY offer a non-strict mode that reports such anchors as
 unverified without failing. A token that is shown to be wrong fails in every
 mode.
 
+A token MAY carry `"qualified": 1`: the operator declares that it comes from
+an eIDAS-qualified timestamp authority configured for the engagement as a
+third backend. It is verified like any other token. The verifier reports
+the declaration and does not check qualified status against the EU trusted
+list.
+
 ## 6a. Merkle anchors — 2.1
 
 An anchor MAY carry `merkle_root` (hex). It is the RFC 6962 Merkle tree
