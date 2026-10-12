@@ -132,18 +132,22 @@ class DERAndTokenTest(unittest.TestCase):
     def test_embedded_roots_include_sigstore(self):
         self.assertIn(SIGSTORE_ROOT, dv.pinned_roots())
 
+    @needs_crypto
     def test_real_sigstore_token_verifies_against_the_embedded_root(self):
         r = dv.verify_token(SIGSTORE_TOKEN, SIGSTORE_HEAD, dv.pinned_roots())
         self.assertTrue(r.cryptographically_verified)
         self.assertEqual(r.root_fingerprint, SIGSTORE_ROOT)
         self.assertTrue(r.gen_time.startswith("2026-10-12T"))
 
-    def test_real_sigstore_token_is_rejected_when_wrong(self):
+    def test_real_sigstore_token_is_rejected_for_another_hash_or_without_its_root(self):
         with self.assertRaisesRegex(dv.TokenError, "imprint"):
             dv.verify_token(SIGSTORE_TOKEN, SECTIGO_HEAD, dv.pinned_roots())
         sectigo_only = {SECTIGO_R46: dv.pinned_roots()[SECTIGO_R46]}
         with self.assertRaisesRegex(dv.TokenError, "pinned root"):
             dv.verify_token(SIGSTORE_TOKEN, SIGSTORE_HEAD, sectigo_only)
+
+    @needs_crypto
+    def test_one_flipped_byte_in_the_real_sigstore_token_is_rejected(self):
         tampered = bytearray(SIGSTORE_TOKEN)
         tampered[len(tampered) // 2] ^= 0x01
         with self.assertRaises(dv.TokenError):
