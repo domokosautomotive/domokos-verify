@@ -50,8 +50,9 @@ WINDOW = timedelta(minutes=15)
 LEDGER_FIELDS = {"seq", "captured_at", "actor_id", "event_type", "payload_json", "prev_hash", "content_hash"}
 CHARTER_EVENT_TYPES = ("charter.recorded", "charter.published")
 
-# Pinned timestamp-authority roots (SPEC §6, rule 7). Additional roots, for
-# example an engagement's second authority, are added with --tsa-root.
+# Pinned timestamp-authority roots (SPEC §6, rule 7): the two authorities
+# selected for Domokos (Sectigo and Sigstore). Additional roots, for example
+# an engagement's qualified authority, are added with --tsa-root.
 PINNED_ROOTS_PEM = {
     "Sectigo Public Time Stamping Root R46": """
 -----BEGIN CERTIFICATE-----
@@ -85,6 +86,21 @@ tNuDIedeBRcHmtjL2hV3luuEWwDSnRhSjhPLPXzqpJ1rG3r4yqm1NjKg5A5QO9Az
 veHqRQldluTSKuu96oPEPusL2oF+4MxkJ+SQMGFWTw/PNCblUN8GXeL5+mR20diP
 5LiJMq8U3IpM/0Q7OFFQ+lXuYFIuDvUprWBPsp5La2WhL2+iLVVXItSl7up5yQqX
 XftzTXTX48FRiJ6PA9o=
+-----END CERTIFICATE-----
+""",
+    "sigstore-tsa-selfsigned (O=sigstore.dev)": """
+-----BEGIN CERTIFICATE-----
+MIIB9zCCAXygAwIBAgIUV7f0GLDOoEzIh8LXSW80OJiUp14wCgYIKoZIzj0EAwMw
+OTEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MSAwHgYDVQQDExdzaWdzdG9yZS10c2Et
+c2VsZnNpZ25lZDAeFw0yNTA0MDgwNjU5NDNaFw0zNTA0MDYwNjU5NDNaMDkxFTAT
+BgNVBAoTDHNpZ3N0b3JlLmRldjEgMB4GA1UEAxMXc2lnc3RvcmUtdHNhLXNlbGZz
+aWduZWQwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQUQNtfRT/ou3YATa6wB/kKTe70
+cfJwyRIBovMnt8RcJph/COE82uyS6FmppLLL1VBPGcPfpQPYJNXzWwi8icwhKQ6W
+/Qe2h3oebBb2FHpwNJDqo+TMaC/tdfkv/ElJB72jRTBDMA4GA1UdDwEB/wQEAwIB
+BjASBgNVHRMBAf8ECDAGAQH/AgEAMB0GA1UdDgQWBBSY7AHvf7tR/9SVHm+KiJhT
+B4nOvzAKBggqhkjOPQQDAwNpADBmAjEAwGEGrfGZR1cen1R8/DTVMI943LssZmJR
+tDp/i7SfGHmGRP6gRbuj9vOK3b67Z0QQAjEAuT2H673LQEaHTcyQSZrkp4mX7Wwk
+mF+sVbkYY5mXN+RMH13KUEHHOqASaemYWK/E
 -----END CERTIFICATE-----
 """,
 }

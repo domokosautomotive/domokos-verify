@@ -60,10 +60,15 @@ Every check runs even after a problem:
 ## Pinned roots and strict mode
 
 Timestamp tokens are accepted only if their certificate chain reaches a root
-the verifier pins. Certificates inside a bundle are never used as roots. The built-in pin
-is the Sectigo Public Time Stamping Root R46, SHA-256 fingerprint
-`4941b001b8a97e961b7817c9d9e960ec4b056bfc915a8c1aabf6ef6b3ac046a5`. Pin any
-other authority an engagement uses with `--tsa-root`.
+the verifier pins. Certificates inside a bundle are never used as roots. The built-in pins
+are the roots of the two authorities Domokos uses:
+
+| Authority | Root | SHA-256 fingerprint |
+|---|---|---|
+| Sectigo, `http://timestamp.sectigo.com/rfc3161` | Sectigo Public Time Stamping Root R46 | `4941b001b8a97e961b7817c9d9e960ec4b056bfc915a8c1aabf6ef6b3ac046a5` |
+| Sigstore, `https://timestamp.sigstore.dev/api/v1/timestamp` | sigstore-tsa-selfsigned (O=sigstore.dev) | `2aca8fea5d3ce48b01cc77076293c280e6c23ffe44034757ee7833ca9f45d633` |
+
+Pin any other authority an engagement uses with `--tsa-root`.
 
 Strict mode is the default. If an RFC 3161 token cannot be checked
 cryptographically, for example because pyca/cryptography is not installed,
@@ -95,8 +100,8 @@ python -m unittest discover -s tests
 `fixtures/vectors/spec-2.1` is a copy of the test vectors the Domokos product
 generates: one valid bundle and one bundle per operator-tamper probe, with
 the test timestamp-authority roots and `expected.json`. The suite also checks
-a real token from Sectigo's public RFC 3161 service
-(`fixtures/sectigo_rfc3161_token.der`) and the stdlib-only behaviour.
+a real token from each pinned authority (`fixtures/sectigo_rfc3161_token.der`,
+`fixtures/sigstore_rfc3161_token.der`) and the stdlib-only behaviour.
 
 Found an ambiguity between this tool and SPEC.md? That is a spec defect:
 file it against the spec, not the implementation.

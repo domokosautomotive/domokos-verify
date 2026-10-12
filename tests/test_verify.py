@@ -33,6 +33,12 @@ with open(os.path.join(ROOT, "fixtures", "sectigo_rfc3161_token.der"), "rb") as 
     SECTIGO_TOKEN = _f.read()
 SECTIGO_HEAD = hashlib.sha256(b"domokos live probe").hexdigest()
 SECTIGO_R46 = "4941b001b8a97e961b7817c9d9e960ec4b056bfc915a8c1aabf6ef6b3ac046a5"
+# A live token from Sigstore's public timestamp authority, 2026-10-12 (ECDSA P-384,
+# signer issued directly by the self-signed root).
+with open(os.path.join(ROOT, "fixtures", "sigstore_rfc3161_token.der"), "rb") as _f:
+    SIGSTORE_TOKEN = _f.read()
+SIGSTORE_HEAD = hashlib.sha256(b"domokos sigstore selection check 2026-10-12").hexdigest()
+SIGSTORE_ROOT = "2aca8fea5d3ce48b01cc77076293c280e6c23ffe44034757ee7833ca9f45d633"
 HAVE_CRYPTO = dv._crypto() is not None
 needs_crypto = unittest.skipUnless(HAVE_CRYPTO, "pyca/cryptography is not installed")
 
@@ -123,11 +129,35 @@ class DERAndTokenTest(unittest.TestCase):
         with self.assertRaises(dv.TokenError):
             dv.verify_token(bytes(tampered), SECTIGO_HEAD, dv.pinned_roots())
 
+    def test_embedded_roots_include_sigstore(self):
+        self.assertIn(SIGSTORE_ROOT, dv.pinned_roots())
+
+    def test_real_sigstore_token_verifies_against_the_embedded_root(self):
+        r = dv.verify_token(SIGSTORE_TOKEN, SIGSTORE_HEAD, dv.pinned_roots())
+        self.assertTrue(r.cryptographically_verified)
+        self.assertEqual(r.root_fingerprint, SIGSTORE_ROOT)
+        self.assertTrue(r.gen_time.startswith("2026-10-12T"))
+
+    def test_real_sigstore_token_is_rejected_when_wrong(self):
+        with self.assertRaisesRegex(dv.TokenError, "imprint"):
+            dv.verify_token(SIGSTORE_TOKEN, SECTIGO_HEAD, dv.pinned_roots())
+        sectigo_only = {SECTIGO_R46: dv.pinned_roots()[SECTIGO_R46]}
+        with self.assertRaisesRegex(dv.TokenError, "pinned root"):
+            dv.verify_token(SIGSTORE_TOKEN, SIGSTORE_HEAD, sectigo_only)
+        tampered = bytearray(SIGSTORE_TOKEN)
+        tampered[len(tampered) // 2] ^= 0x01
+        with self.assertRaises(dv.TokenError):
+            dv.verify_token(bytes(tampered), SIGSTORE_HEAD, dv.pinned_roots())
+
     def test_without_cryptography_the_structure_is_checked_but_not_the_signatures(self):
         with mock.patch.object(dv, "_crypto", return_value=None):
             r = dv.verify_token(SECTIGO_TOKEN, SECTIGO_HEAD, dv.pinned_roots())
         self.assertFalse(r.cryptographically_verified)
         self.assertEqual(r.root_fingerprint, SECTIGO_R46)
+        with mock.patch.object(dv, "_crypto", return_value=None):
+            r = dv.verify_token(SIGSTORE_TOKEN, SIGSTORE_HEAD, dv.pinned_roots())
+        self.assertFalse(r.cryptographically_verified)
+        self.assertEqual(r.root_fingerprint, SIGSTORE_ROOT)
 
 
 class VectorTest(unittest.TestCase):
