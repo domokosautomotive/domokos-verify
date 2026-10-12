@@ -1,12 +1,14 @@
 # domokos-verify
 
 Independent verifier for [Domokos](https://domokos-automotive.com) evidence
-bundles. It lets anyone check, without relying on Domokos, that an exported
-record was not changed, removed or reordered after it was externally
-timestamped.
+bundles. It checks an exported bundle with no Domokos code: the hash chain,
+the artefact records rebuilt from it, the signatures, and every RFC 3161
+timestamp token against pinned roots. A change to an entry that an anchor in
+the bundle covers is detected. What a single bundle cannot show is listed
+under "Limit" in [SPEC.md §7](SPEC.md#7-timestamp-summary).
 
 - **No Domokos code.** It implements the published bundle specification,
-  [SPEC.md](SPEC.md) (format `domokos-bundle/2`, spec 2.0.0), and reads
+  [SPEC.md](SPEC.md) (format `domokos-bundle/2`, spec 2.1.0; 2.0.0 bundles verify too), and reads
   nothing but the exported bundle.
 - **Small and auditable.** One file. The core uses the Python 3.9+ standard
   library only, including its own Ed25519 (RFC 8032), RFC 8785 canonical JSON
@@ -19,12 +21,13 @@ timestamped.
 ## Install and use
 
 ```bash
-pipx install domokos-verify
+pipx install git+https://github.com/domokosautomotive/domokos-verify
 domokos-verify bundle.zip
 ```
 
-Until the first release is on PyPI, install from this repository instead:
-`pipx install git+https://github.com/domokosautomotive/domokos-verify`.
+Once version 2.1.0 is released on PyPI, `pipx install domokos-verify` works
+too. Until then, do not install a package of that name from PyPI: it is not
+ours.
 
 Or, from a checkout:
 
@@ -47,7 +50,7 @@ Every check runs even after a problem:
 
 | Check | What it establishes |
 |---|---|
-| Manifest and file integrity | format and versions are spec 2.0; every file matches its manifest SHA-256 |
+| Manifest and file integrity | format and versions are spec 2.0 or 2.1; every file matches its manifest SHA-256 |
 | Hash chain integrity | every payload is canonical JSON; every hash recomputes (scheme 2); entries link from genesis to the head; time never goes back |
 | Sequence continuity accounting | no absent sequence number: what the PDF renders plus what it omits covers the whole range |
 | Declared filter is reproducible | re-running the declared filter reproduces exactly what the PDF rendered |

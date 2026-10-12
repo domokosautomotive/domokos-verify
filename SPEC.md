@@ -333,6 +333,15 @@ alone. Removing them, together with any anchor taken over them, cannot be
 detected from the bundle; the report names them instead. Removing entries at
 or below an anchored seq while the anchor remains is detected (§6).
 
+**Limit (re-anchoring).** Public timestamp authorities issue a token for any
+digest at any time. Whoever controls the ledger can therefore rewrite the
+entries after some seq, delete the anchors over them, and anchor the
+rewritten chain again. A bundle exported afterwards verifies. Its rewritten
+entries appear in the late list above unless their `captured_at` was
+rewritten too. Such a rewrite shows only against a bundle exported before
+it: every anchored head hash in the earlier bundle must recur unchanged in
+the later bundle's chain. This section is informative and changes no rule.
+
 ## 8. PDF continuity statement
 
 The PDF Info dictionary's `/Subject` is the continuity object serialised as
