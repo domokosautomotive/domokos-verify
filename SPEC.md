@@ -223,8 +223,9 @@ the entry it signs, each listed member MUST equal the value shown:
   A.provenance.model (or null), `requirement_ids` the sorted distinct
   `requirement_id`s of A.requirement_links.
 - `artefact.reviewed`: `type` "artefact.review", `artefact_id`,
-  `reviewer_id`, `decision`, `rationale`, `diff`, `independence_waiver`
-  (from `payload.review`; `artefact_id` from the payload).
+  `reviewer_id`, `decision`, `rationale`, `diff`, `independence_waiver`,
+  `ai_assisted` (false when the review has no such member) and
+  `ai_assistance` (from `payload.review`; `artefact_id` from the payload).
 - `artefact.attested`: `type` "artefact.attest", `artefact_id`,
   `attester_id`.
 

@@ -1063,7 +1063,8 @@ def _statement_expectation(event_type: str, p: Dict[str, Any]) -> Dict[str, Any]
         r = p.get("review", {})
         return {"type": "artefact.review", "artefact_id": p.get("artefact_id"), "reviewer_id": r.get("reviewer_id"),
                 "decision": r.get("decision"), "rationale": r.get("rationale"), "diff": r.get("diff"),
-                "independence_waiver": r.get("independence_waiver")}
+                "independence_waiver": r.get("independence_waiver"), "ai_assisted": r.get("ai_assisted", False),
+                "ai_assistance": r.get("ai_assistance")}
     return {"type": "artefact.attest", "artefact_id": p.get("artefact_id"), "attester_id": p.get("attester_id")}
 
 
